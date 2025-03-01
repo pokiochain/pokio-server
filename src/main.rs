@@ -306,7 +306,7 @@ fn get_mining_template(coins: &str, miner: &str) -> String {
 			raw_tx = String::new();
 		}
 	}
-	format!("0000000000000000-{}-{}-{}-{}-{}", coins_dec, diff, prevhash, miner, raw_tx)
+	format!("0000000000000000-{}-{}-{}-{}-{}-{}", coins_dec, diff, height, prevhash, miner, raw_tx)
 }
 
 fn generate_reward_tx(
