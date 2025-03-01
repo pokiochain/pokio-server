@@ -265,6 +265,11 @@ fn get_latest_block_info() -> (u64, String) {
 	(0, "0000000000000000000000000000000000000000000000000000000000000000".to_string())
 }
 
+fn calculate_diff(coins: u32) -> u32 {
+    let result = (4 - (coins as f64).log(10.0).ceil()) as u32;
+    coins * (250000 * result)
+}
+
 fn get_mining_template(coins: &str, miner: &str) -> String {
 	let db = config::db();
 	let (prevhash, height) = if let Some(latest) = db.get("chain:latest_block").unwrap() {
@@ -286,10 +291,11 @@ fn get_mining_template(coins: &str, miner: &str) -> String {
 		)
 	};
 	
-	let coins_dec = u64::from_str_radix(coins, 16).unwrap_or(0);
-	let diff = format!("{:016X}", coins_dec * 10000);
+	let coins_dec = coins.parse::<u32>().unwrap_or(0);
+	let diff_dec = calculate_diff(coins_dec);
+	let diff = format!("{:016X}", diff_dec);
 	
-	let nonce = 100000000 + height;
+	let nonce = 100000000 + height + 1;
 	let base_wei = BigUint::parse_bytes(b"1000000000000000000", 10).unwrap();
 	let coins_biguint = BigUint::from_str(coins).unwrap();
 	let wei_amount = coins_biguint * &base_wei;
@@ -306,7 +312,7 @@ fn get_mining_template(coins: &str, miner: &str) -> String {
 			raw_tx = String::new();
 		}
 	}
-	format!("0000000000000000-{}-{}-{}-{}-{}-{}", coins_dec, diff, height, prevhash, miner, raw_tx)
+	format!("0000000000000000-{}-{}-{}-{}-{}-{}", coins_dec, diff, height+1, prevhash, miner, raw_tx)
 }
 
 fn generate_reward_tx(
@@ -699,6 +705,6 @@ async fn main() -> sled::Result<()> {
 		});
 
 	let routes = rpc_route.or(mining_route);
-	warp::serve(routes).run(([127, 0, 0, 1], 3030)).await;
+	warp::serve(routes).run(([0, 0, 0, 0], 3030)).await;
 	Ok(())
 }
