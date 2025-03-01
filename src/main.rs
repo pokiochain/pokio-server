@@ -475,11 +475,6 @@ async fn main() -> sled::Result<()> {
 			
 			
 		});
-		/*.map(|| {
-			println!("Mining requested");
-			let _ = mine_block();
-			warp::reply::json(&json!({"status": "mining", "message": "Mining operation started"}))
-		});*/
 
 	let routes = rpc_route.or(mining_route);
 	warp::serve(routes).run(([127, 0, 0, 1], 3030)).await;
