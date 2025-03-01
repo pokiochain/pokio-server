@@ -1,18 +1,19 @@
-use ethers::signers::{LocalWallet, Signer}; // Importamos `Signer` para usar `.address()`
-use std::fs;
-use std::sync::OnceLock;
-use serde::Deserialize;
-use std::str::FromStr;
+use ethers::signers::{LocalWallet, Signer};
 use ethers::types::Address;
+use serde::Deserialize;
+use std::fs;
+use std::str::FromStr;
+use std::sync::OnceLock;
+use sled;
 
 static PKEY: OnceLock<String> = OnceLock::new();
 static ETH_ADDRESS: OnceLock<Address> = OnceLock::new();
+static DB: OnceLock<sled::Db> = OnceLock::new();
 
 #[derive(Deserialize)]
 struct KeyFile {
     privatekey: String,
 }
-
 
 pub fn load_key() {
     let data = fs::read_to_string("pokio.json").expect("Can't load pokio.json");
@@ -24,6 +25,9 @@ pub fn load_key() {
     let address = wallet.address();
 
     ETH_ADDRESS.set(address).expect("Address was started");
+
+    let db = sled::open("blockchain_db").expect("Failed to open blockchain database");
+    DB.set(db).expect("Database was already initialized");
 }
 
 pub fn pkey() -> &'static str {
@@ -32,4 +36,8 @@ pub fn pkey() -> &'static str {
 
 pub fn address() -> Address {
     *ETH_ADDRESS.get().expect("Address not loaded")
+}
+
+pub fn db() -> &'static sled::Db {
+    DB.get().expect("Database not loaded")
 }

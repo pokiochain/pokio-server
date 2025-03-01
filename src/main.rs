@@ -204,7 +204,8 @@ fn keccak256(data: &str) -> String {
 	hex::encode(output)
 }
 
-fn get_latest_block_info(db: &sled::Db) -> (u64, String) {
+fn get_latest_block_info() -> (u64, String) {
+	let db = config::db();
 	if let Some(latest) = db.get("chain:latest_block").unwrap() {
 		let latest_height = u64::from_be_bytes(latest.as_ref().try_into().unwrap());
 		let block_key = format!("block:{:08}", latest_height);
@@ -216,7 +217,8 @@ fn get_latest_block_info(db: &sled::Db) -> (u64, String) {
 	(0, "0000000000000000000000000000000000000000000000000000000000000000".to_string())
 }
 
-fn get_mining_template(db: &sled::Db, coins: &str, miner: &str) -> String {
+fn get_mining_template(coins: &str, miner: &str) -> String {
+	let db = config::db();
 	let (prevhash, height) = if let Some(latest) = db.get("chain:latest_block").unwrap() {
 		let latest_height = u64::from_be_bytes(latest.as_ref().try_into().unwrap());
 		let block_key = format!("block:{:08}", latest_height);
@@ -249,11 +251,11 @@ fn get_mining_template(db: &sled::Db, coins: &str, miner: &str) -> String {
 
 	match generate_reward_tx(config::pkey(), nonce, miner, reward_amount) {
 		Ok(tx) => {
-			println!("Raw Signed Reward TX: 0x{}", tx);
+			//println!("Raw Signed Reward TX: 0x{}", tx);
 			raw_tx = tx;
 		}
 		Err(e) => {
-			println!("Error generating reward transaction: {}", e);
+			//println!("Error generating reward transaction: {}", e);
 			raw_tx = String::new();
 		}
 	}
@@ -286,7 +288,7 @@ fn generate_reward_tx(
 fn decode_transaction(raw_tx_hex: &str) -> Result<()> {
 	let raw_tx_bytes = hex::decode(raw_tx_hex.strip_prefix("0x").unwrap_or(raw_tx_hex))?;
 	let tx: Transaction = rlp::decode(&raw_tx_bytes)?;
-	println!("Chain ID: {:?}", tx);
+	//println!("Chain ID: {:?}", tx);
 	
 	let mut bytes = [0u8; 32];
 	tx.nonce.to_little_endian(&mut bytes);
@@ -329,19 +331,21 @@ fn decode_transaction(raw_tx_hex: &str) -> Result<()> {
 		return Ok(());
 	}
 
-	match recover_sender_address(adjusted_v, &r_hex, &s_hex, message_hash.into()) {
+	/*match recover_sender_address(adjusted_v, &r_hex, &s_hex, message_hash.into()) {
 		Ok(address) => println!("Recovered address: {:?}", address),
 		Err(e) => println!("Error: {}", e),
-	}
+	}*/
 	Ok(())
 }
 
-fn mine_block() -> sled::Result<()> {
-	let db = sled::open("blockchain_db")?;
-	let coins = "3"; //hex
-	let miner = format!("0x{}", hex::encode(config::address()));
-	let mining_template = get_mining_template(&db, coins, &miner);
-	println!("Mining Template: {}", mining_template);
+fn mine_block(coins: &str, miner: &str, nonce: &str) -> sled::Result<()> {
+	//let miner = format!("0x{}", hex::encode(config::address()));
+	let mining_template = get_mining_template(&coins, &miner);
+	let mut modified_password = nonce.to_string();
+	if mining_template.len() > 16 {
+		modified_password.push_str(&mining_template[16..]);
+	}
+	//println!("Mining Template: {}", mining_template);
 	
 	let parts: Vec<&str> = mining_template.split('-').collect();
 	//println!("Nonce: {}", parts[0]);
@@ -352,16 +356,16 @@ fn mine_block() -> sled::Result<()> {
 	let mined_coins_difficulty = u64::from_str_radix(parts[2], 16).unwrap_or(u64::MAX);
 	let block_difficulty = mined_coins_difficulty.clone();
 	
-	let mining_hash = pokiohash_hash(&mining_template, &miner);
+	let mining_hash = pokiohash_hash(&modified_password, nonce);
 	let mining_difficulty = hash_to_difficulty(&mining_hash) as U256;
 	
 	let block_transactions = parts[5];
 
 	println!("Block found. Diff: {}, Hash: {}", mining_difficulty, mining_hash);
-	
-	if mining_difficulty < block_difficulty.into()
+	let db = config::db();
+	if mining_difficulty > block_difficulty.into()
 	{
-		let (actual_height, actual_hash) = get_latest_block_info(&db);
+		let (actual_height, actual_hash) = get_latest_block_info();
 
 		let mut new_block = Block {
 			height: actual_height + 1,
@@ -422,8 +426,6 @@ async fn main() -> sled::Result<()> {
     println!("Private key: {}", config::pkey());
 	println!("Address (hex): 0x{}", ethers::utils::hex::encode(config::address())); 
 	
-	mine_block();
-	
 	let rpc_route = warp::path("rpc")
 		.and(warp::post())
 		.and(warp::body::json())
@@ -443,34 +445,29 @@ async fn main() -> sled::Result<()> {
 				"eth_getBalance" => json!({"jsonrpc": "2.0", "id": id, "result": "0xfadfafaafffffffffff"}),
 				_ => json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32600, "message": "The method does not exist/is not available"}}),
 			};
-			
 			warp::reply::json(&response)
-			
-			
 		});
 		
 	let mining_route = warp::path("mining")
 		.and(warp::post())
 		.and(warp::body::json())
 		.map(|data: serde_json::Value| {
-			println!("Received JSON: {}", data);
-			
-			
-			
 			let id = data["id"].as_str().unwrap_or("unknown");
 			let method = data["method"].as_str().unwrap_or("");
-			
 			let response = match method {
 				"getMiningTemplate" => {
-					
-					json!({"jsonrpc": "2.0", "id": id, "result": "0x471d7"})
+					let coins = data["coins"].as_str().unwrap_or("1000");
+					let miner = data["miner"].as_str().unwrap_or("");
+					let mining_template = get_mining_template(coins, miner);
+					json!({"jsonrpc": "2.0", "id": id, "result": mining_template})
 				},
-				"eth_blockNumber" => {
-					let block_number = format!("0x{:x}", (chrono::Utc::now().timestamp() / 1000000));
-					json!({"jsonrpc": "2.0", "id": id, "result": block_number})
+				"submitBlock" => {
+					let coins = data["coins"].as_str().unwrap_or("1000");
+					let miner = data["miner"].as_str().unwrap_or("");
+					let nonce = data["nonce"].as_str().unwrap_or("0000000000000000");
+					let _ = mine_block(coins, miner, nonce);
+					json!({"jsonrpc": "2.0", "id": id, "result": "ok"})
 				},
-				"net_version" => json!({"jsonrpc": "2.0", "id": id, "result": "291287"}),
-				"eth_getBalance" => json!({"jsonrpc": "2.0", "id": id, "result": "0xfadfafaafffffffffff"}),
 				_ => json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32600, "message": "The method does not exist/is not available"}}),
 			};
 			
