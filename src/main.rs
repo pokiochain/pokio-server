@@ -25,8 +25,56 @@ use secp256k1::{Secp256k1, Message, ecdsa::{RecoverableSignature, RecoveryId}};
 use sha3::{Keccak256};
 use num_traits::Num;
 use rlp::RlpStream;
+use eyre::anyhow;
+use std::thread;
+use std::io::{self};
+use serde_json::Value;
+use num_traits::Zero;
 
 mod config;
+
+fn update_balance(address: &str, amount_to_add: &str) -> Result<(), Box<dyn std::error::Error>> {
+	let db = config::db();
+    let address_lowercase = address.to_lowercase();
+    let address_key = address_lowercase.as_bytes();
+    if let Some(existing_balance) = db.get(address_key)? {
+        let existing_balance_str = String::from_utf8_lossy(&existing_balance);
+        let mut current_balance = BigUint::parse_bytes(existing_balance_str.as_bytes(), 10)
+            .ok_or("Error al convertir el balance actual a BigUint")?;
+        
+        let amount_to_add_biguint = BigUint::parse_bytes(amount_to_add.as_bytes(), 10)
+            .ok_or("Error al convertir el monto a BigUint")?;
+        
+        current_balance += amount_to_add_biguint;
+        db.insert(address_key, current_balance.to_string().as_bytes())?;
+    } else {
+        let initial_balance = BigUint::parse_bytes(amount_to_add.as_bytes(), 10)
+            .ok_or("Error al convertir el monto a BigUint")?;
+        db.insert(address_key, initial_balance.to_string().as_bytes())?;
+    }
+
+    if let Some(updated_balance) = db.get(address_key)? {
+        let updated_balance_str = String::from_utf8_lossy(&updated_balance);
+        println!("Registro actualizado para la dirección {}: {}", address, updated_balance_str);
+    } else {
+        println!("La dirección no existe en la base de datos.");
+    }
+    Ok(())
+}
+
+fn get_balance(address: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let db = config::db();
+    let address_lowercase = address.to_lowercase();
+    let address_key = address_lowercase.as_bytes();
+
+    if let Some(balance) = db.get(address_key)? {
+        let balance_str = String::from_utf8_lossy(&balance);
+        Ok(balance_str.to_string())
+    } else {
+        Ok("0".to_string())
+    }
+}
+
 
 pub fn recover_sender_address(v: u8, r: &str, s: &str, message_hash: [u8; 32]) -> Result<H160, String> {
 	let secp = Secp256k1::new();
@@ -242,7 +290,6 @@ fn get_mining_template(coins: &str, miner: &str) -> String {
 	let diff = format!("{:016X}", coins_dec * 10000);
 	
 	let nonce = 100000000 + height;
-	let private_key = "";
 	let base_wei = BigUint::parse_bytes(b"1000000000000000000", 10).unwrap();
 	let coins_biguint = BigUint::from_str(coins).unwrap();
 	let wei_amount = coins_biguint * &base_wei;
@@ -268,7 +315,7 @@ fn generate_reward_tx(
 	miner_address: &str,
 	reward_amount: EthersU256,
 ) -> eyre::Result<String> {
-	let wallet = LocalWallet::from_str(private_key)?.with_chain_id(291287u64);
+	let wallet = LocalWallet::from_str(private_key)?.with_chain_id(10485u64);
 
 	let tx = TransactionRequest::new()
 		.nonce(nonce)
@@ -280,14 +327,14 @@ fn generate_reward_tx(
 	let tx: TypedTransaction = tx.into();
 	let signature = wallet.sign_transaction_sync(&tx)?;
 	let raw_signed_tx = tx.rlp_signed(&signature);
-	decode_transaction(&hex::encode(&raw_signed_tx))?;
+	let _dtx = decode_transaction(&hex::encode(&raw_signed_tx))?;
 
 	Ok(hex::encode(raw_signed_tx))
 }
 
-fn decode_transaction(raw_tx_hex: &str) -> Result<()> {
+fn decode_transaction(raw_tx_hex: &str) -> Result<Transaction> {
 	let raw_tx_bytes = hex::decode(raw_tx_hex.strip_prefix("0x").unwrap_or(raw_tx_hex))?;
-	let tx: Transaction = rlp::decode(&raw_tx_bytes)?;
+	let mut tx: Transaction = rlp::decode(&raw_tx_bytes)?;
 	//println!("Chain ID: {:?}", tx);
 	
 	let mut bytes = [0u8; 32];
@@ -307,13 +354,12 @@ fn decode_transaction(raw_tx_hex: &str) -> Result<()> {
 	tx.value.to_little_endian(&mut valbytes);
 	let value = U256::from_little_endian(&valbytes);
 	
-	let input = tx.input;
+	let input = tx.input.clone();
 	let dest_str = tx.to.map(|addr| format!("{:x}", addr)).unwrap_or_default();
 	let to = H160::from_slice(&hex::decode(dest_str).unwrap());
 	let chain_id = tx.chain_id.unwrap_or(EthersU256::zero()).as_u64();
 
 	let message_hash = calculate_message_hash(nonce, gas_price, gas, to, value, &input, chain_id);
-	//println!("Message hash: {}", hex::encode(message_hash));
 
 	let v: U64 = tx.v;
 	let r = tx.r.to_string();
@@ -324,18 +370,57 @@ fn decode_transaction(raw_tx_hex: &str) -> Result<()> {
 	let s_hex = format!("{:064x}", s_bigint);
 
 	let adjusted_v = (v.as_u64() - (2 * chain_id + 35)) as u8;
-	//println!("Original v: {}, Adjusted v: {}", v, adjusted_v);
 
 	if adjusted_v > 1 {
 		println!("Invalid adjusted `v` value: {}", adjusted_v);
-		return Ok(());
+		return Err(anyhow!("Invalid adjusted v value"));
 	}
 
-	/*match recover_sender_address(adjusted_v, &r_hex, &s_hex, message_hash.into()) {
-		Ok(address) => println!("Recovered address: {:?}", address),
-		Err(e) => println!("Error: {}", e),
-	}*/
-	Ok(())
+	match recover_sender_address(adjusted_v, &r_hex, &s_hex, message_hash.into()) {
+		Ok(address) => {
+			tx.from = ethers::types::H160::from_slice(address.as_bytes());
+			Ok(tx)
+		},
+		Err(e) => {
+			println!("Error: {}", e);
+			Err(anyhow!("Failed to recover sender address"))
+		}
+	}
+}
+
+
+
+
+fn get_16th_block() -> Option<Block> {
+	let db = config::db();
+    if let Some(latest) = db.get("chain:latest_block").unwrap() {
+        let latest_height = u64::from_be_bytes(latest.as_ref().try_into().unwrap());
+        let mut block_key = format!("block:{:08}", latest_height);
+        
+        for i in 0..16 {
+            if let Some(block_data) = db.get(&block_key).unwrap() {
+                let block: Block = bincode::deserialize(&block_data).unwrap();
+                
+                if i == 15 {
+                    return Some(block);
+                }
+                
+                if block.prev_hash.is_empty() {
+                    break;
+                }
+
+                if let Some(prev_height) = db.get(format!("hash:{}", block.prev_hash)).unwrap() {
+                    let prev_height = u64::from_be_bytes(prev_height.as_ref().try_into().unwrap());
+                    block_key = format!("block:{:08}", prev_height);
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+    }
+    None
 }
 
 fn mine_block(coins: &str, miner: &str, nonce: &str) -> sled::Result<()> {
@@ -412,11 +497,47 @@ fn mine_block(coins: &str, miner: &str, nonce: &str) -> sled::Result<()> {
 		let block_key = format!("block:{:08}", latest_height);
 		if let Some(block_data) = db.get(block_key)? {
 			let block: Block = bincode::deserialize(&block_data).unwrap();
-			println!("Last block: {:?}", block);
+			//println!("Last block tx: {:?}", block.transactions);
+			
 		}
 	}
+	
+	if let Some(block) = get_16th_block() {
+        println!("16th block: {:?}", block);
+		let dtx = decode_transaction(&block.transactions);
+		match dtx {
+			Ok(tx) => {
+				let address = tx.to.map(|addr| format!("{:?}", addr)).unwrap_or("None".to_string());
+				let amount = tx.value.to_string();
+				update_balance(&address, &amount).expect("Error al actualizar el balance");
+				println!(
+					"dtx: {} -> {}",
+					address,
+					amount
+				);
+			}
+			Err(e) => {
+				eprintln!("Error al procesar la transacción: {:?}", e);
+			}
+		}
+    } else {
+        println!("Could not retrieve the 16th block.");
+    }
 
 	Ok(())
+}
+
+fn get_block_as_json(block_number: u64) -> Value {
+    let db = config::db();
+    let block_key = format!("block:{:08}", block_number);
+
+    if let Some(block_data) = db.get(block_key).ok().flatten() {
+        if let Ok(block) = bincode::deserialize::<Block>(&block_data) {
+            return serde_json::to_value(block).unwrap()
+        }
+    }
+
+    json!(null)
 }
 
 #[tokio::main]
@@ -424,7 +545,18 @@ async fn main() -> sled::Result<()> {
 	
     config::load_key();
     println!("Private key: {}", config::pkey());
-	println!("Address (hex): 0x{}", ethers::utils::hex::encode(config::address())); 
+	println!("Address (hex): 0x{}", ethers::utils::hex::encode(config::address()));
+	
+	// i/o thread
+	thread::spawn(move || {
+		loop {
+			let mut input = String::new();
+			io::stdin().read_line(&mut input).unwrap();
+			if input.trim() == "h" {
+				println!("helloo");
+			}
+		}
+	});
 	
 	let rpc_route = warp::path("rpc")
 		.and(warp::post())
@@ -438,11 +570,101 @@ async fn main() -> sled::Result<()> {
 			let response = match method {
 				"eth_chainId" => json!({"jsonrpc": "2.0", "id": id, "result": "0x471d7"}),
 				"eth_blockNumber" => {
-					let block_number = format!("0x{:x}", (chrono::Utc::now().timestamp() / 1000000));
+					let (actual_height, actual_hash) = get_latest_block_info();
+					let block_number = format!("0x{:x}", actual_height);
 					json!({"jsonrpc": "2.0", "id": id, "result": block_number})
 				},
-				"net_version" => json!({"jsonrpc": "2.0", "id": id, "result": "291287"}),
-				"eth_getBalance" => json!({"jsonrpc": "2.0", "id": id, "result": "0xfadfafaafffffffffff"}),
+				"eth_getBlockByNumber" => {
+					let block_number = data["params"]
+						.get(0)
+						.and_then(|v| v.as_str())
+						.and_then(|s| u64::from_str_radix(s.trim_start_matches("0x"), 16).ok())
+						.unwrap_or(1);
+					let mut block_json = get_block_as_json(block_number);
+					
+					if let Value::Object(mut obj) = block_json {
+						if let Some(height) = obj.remove("height") {
+							obj.insert("number".to_string(), height);
+						}
+						block_json = Value::Object(obj);
+					}
+					
+					if let Value::Object(mut obj) = block_json {
+						if let Some(state_root) = obj.remove("state_root") {
+							obj.insert("stateRoot".to_string(), state_root);
+						}
+						block_json = Value::Object(obj);
+					}
+					
+					if let Value::Object(mut obj) = block_json {
+						if let Some(prev_hash) = obj.remove("prev_hash") {
+							obj.insert("parentHash".to_string(), prev_hash);
+						}
+						block_json = Value::Object(obj);
+					}
+					
+					if let Value::Object(ref mut obj) = block_json {
+						if let Some(timestamp) = obj.remove("timestamp") {
+							if let Some(mut_number) = timestamp.as_u64() {
+								let hex_timestamp = format!("0x{:x}", mut_number);
+								obj.insert("timestamp".to_string(), Value::String(hex_timestamp));
+							}
+						}
+					}
+					
+					if let Value::Object(ref mut obj) = block_json {
+						if let Some(difficulty) = obj.remove("difficulty") {
+							if let Some(mut_number) = difficulty.as_u64() {
+								let hex_timestamp = format!("0x{:x}", mut_number);
+								obj.insert("difficulty".to_string(), Value::String(hex_timestamp));
+							}
+						}
+					}
+					
+					if let Value::Object(ref mut obj) = block_json {
+						if let Some(gas_limit) = obj.remove("gas_limit") {
+							if let Some(mut_number) = gas_limit.as_u64() {
+								let hex_timestamp = format!("0x{:x}", mut_number);
+								obj.insert("gas_limit".to_string(), Value::String(hex_timestamp));
+							}
+						}
+					}
+					
+					if let Value::Object(ref mut obj) = block_json {
+						if let Some(gas_used) = obj.remove("gas_used") {
+							if let Some(mut_number) = gas_used.as_u64() {
+								let hex_timestamp = format!("0x{:x}", mut_number);
+								obj.insert("gas_used".to_string(), Value::String(hex_timestamp));
+							}
+						}
+					}
+					
+					if let Value::Object(ref mut obj) = block_json {
+						if let Some(number) = obj.remove("number") {
+							if let Some(mut_number) = number.as_u64() {
+								let hex_timestamp = format!("0x{:x}", mut_number);
+								obj.insert("number".to_string(), Value::String(hex_timestamp));
+							}
+						}
+					}
+					
+					json!({"jsonrpc": "2.0", "id": id, "result": block_json})
+				},
+				"net_version" => json!({"jsonrpc": "2.0", "id": id, "result": "10485"}),
+				"eth_getBalance" => {
+					let address = data["params"]
+						.get(0)
+						.and_then(|v| v.as_str())
+						.unwrap_or("");
+					let address_balance = get_balance(address);
+					let balance = match address_balance {
+						Ok(b) => b,
+						Err(_) => "0".to_string(),
+					};
+					let balance_biguint = BigUint::from_str(&balance).unwrap_or_else(|_| BigUint::zero());
+					let hex_balance = format!("0x{}", balance_biguint.to_str_radix(16));
+					json!({"jsonrpc": "2.0", "id": id, "result": hex_balance})
+				},
 				_ => json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32600, "message": "The method does not exist/is not available"}}),
 			};
 			warp::reply::json(&response)
