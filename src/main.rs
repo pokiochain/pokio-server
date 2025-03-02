@@ -30,6 +30,7 @@ use std::thread;
 use std::io::{self};
 use serde_json::Value;
 use num_traits::Zero;
+use std::cmp::max; 
 
 mod config;
 
@@ -40,24 +41,24 @@ fn update_balance(address: &str, amount_to_add: &str) -> Result<(), Box<dyn std:
     if let Some(existing_balance) = db.get(address_key)? {
         let existing_balance_str = String::from_utf8_lossy(&existing_balance);
         let mut current_balance = BigUint::parse_bytes(existing_balance_str.as_bytes(), 10)
-            .ok_or("Error al convertir el balance actual a BigUint")?;
+            .ok_or("Error converting to BigUint")?;
         
         let amount_to_add_biguint = BigUint::parse_bytes(amount_to_add.as_bytes(), 10)
-            .ok_or("Error al convertir el monto a BigUint")?;
+            .ok_or("Error converting to BigUint")?;
         
         current_balance += amount_to_add_biguint;
         db.insert(address_key, current_balance.to_string().as_bytes())?;
     } else {
         let initial_balance = BigUint::parse_bytes(amount_to_add.as_bytes(), 10)
-            .ok_or("Error al convertir el monto a BigUint")?;
+            .ok_or("Error converting to BigUint")?;
         db.insert(address_key, initial_balance.to_string().as_bytes())?;
     }
 
     if let Some(updated_balance) = db.get(address_key)? {
         let updated_balance_str = String::from_utf8_lossy(&updated_balance);
-        println!("Registro actualizado para la dirección {}: {}", address, updated_balance_str);
+        println!("Register updated {}: {}", address, updated_balance_str);
     } else {
-        println!("La dirección no existe en la base de datos.");
+        println!("Address not registered");
     }
     Ok(())
 }
@@ -265,8 +266,8 @@ fn get_latest_block_info() -> (u64, String) {
 	(0, "0000000000000000000000000000000000000000000000000000000000000000".to_string())
 }
 
-fn calculate_diff(coins: u32) -> u32 {
-    let result = (4 - (coins as f64).log(10.0).ceil()) as u32;
+fn calculate_diff(coins: u64) -> u64 {
+    let result = max(1, (4.0 - (coins as f64).log(10.0).ceil()) as u64);
     coins * (250000 * result)
 }
 
@@ -291,7 +292,7 @@ fn get_mining_template(coins: &str, miner: &str) -> String {
 		)
 	};
 	
-	let coins_dec = coins.parse::<u32>().unwrap_or(0);
+	let coins_dec = coins.parse::<u64>().unwrap_or(0);
 	let diff_dec = calculate_diff(coins_dec);
 	let diff = format!("{:016X}", diff_dec);
 	
@@ -394,9 +395,6 @@ fn decode_transaction(raw_tx_hex: &str) -> Result<Transaction> {
 	}
 }
 
-
-
-
 fn get_16th_block() -> Option<Block> {
 	let db = config::db();
     if let Some(latest) = db.get("chain:latest_block").unwrap() {
@@ -450,7 +448,7 @@ fn mine_block(coins: &str, miner: &str, nonce: &str) -> sled::Result<()> {
 	let mining_hash = pokiohash_hash(&modified_password, nonce);
 	let mining_difficulty = hash_to_difficulty(&mining_hash) as U256;
 	
-	let block_transactions = parts[5];
+	let block_transactions = parts[6];
 
 	println!("Block found. Diff: {}, Hash: {}", mining_difficulty, mining_hash);
 	let db = config::db();
@@ -515,7 +513,7 @@ fn mine_block(coins: &str, miner: &str, nonce: &str) -> sled::Result<()> {
 			Ok(tx) => {
 				let address = tx.to.map(|addr| format!("{:?}", addr)).unwrap_or("None".to_string());
 				let amount = tx.value.to_string();
-				update_balance(&address, &amount).expect("Error al actualizar el balance");
+				update_balance(&address, &amount).expect("Error updating balance");
 				println!(
 					"dtx: {} -> {}",
 					address,
@@ -523,7 +521,7 @@ fn mine_block(coins: &str, miner: &str, nonce: &str) -> sled::Result<()> {
 				);
 			}
 			Err(e) => {
-				eprintln!("Error al procesar la transacción: {:?}", e);
+				eprintln!("Error processing tx: {:?}", e);
 			}
 		}
     } else {
