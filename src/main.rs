@@ -569,6 +569,24 @@ fn start_nng_server() {
     });
 }
 
+fn get_next_blocks(start_height: u64) -> Value {
+    let mut blocks = Vec::new();
+    let db = config::db();
+    for i in 0..1000 {
+        let height = start_height + i;
+        let key = format!("block:{:08}", height);
+
+        if let Some(serialized_block) = db.get(&key).unwrap() {
+            if let Ok(block) = bincode::deserialize::<Block>(&serialized_block) {
+                blocks.push(block);
+            }
+        } else {
+            break;
+        }
+    }
+    json!(blocks)
+}
+
 #[tokio::main]
 async fn main() -> sled::Result<()> {
 	
@@ -600,6 +618,10 @@ async fn main() -> sled::Result<()> {
 			let method = data["method"].as_str().unwrap_or("");
 			
 			let response = match method {
+				"pokio_getBlocks" => {
+					let blocks = get_next_blocks(1);
+					json!({"jsonrpc": "2.0", "id": id, "result": blocks})
+				},
 				"eth_chainId" => json!({"jsonrpc": "2.0", "id": id, "result": "0x471d7"}),
 				"eth_blockNumber" => {
 					let (actual_height, actual_hash) = get_latest_block_info();
