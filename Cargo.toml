@@ -24,4 +24,6 @@ ethereum-types = "0.12"
 secp256k1 = { version = "0.24", features = ["recovery"] }
 sha3 = "0.10"
 anyhow = "1.0.96"
+nng = "1.0"
+
 

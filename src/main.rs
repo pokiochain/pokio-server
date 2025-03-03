@@ -31,6 +31,8 @@ use std::io::{self};
 use serde_json::Value;
 use num_traits::Zero;
 use std::cmp::max; 
+use nng::{Socket, Protocol};
+use std::time::Duration;
 
 mod config;
 
@@ -268,7 +270,7 @@ fn get_latest_block_info() -> (u64, String) {
 
 fn calculate_diff(coins: u64) -> u64 {
     let result = max(1, (4.0 - (coins as f64).log(10.0).ceil()) as u64);
-    coins * (250000 * result)
+    coins * (500 * result)
 }
 
 fn get_mining_template(coins: &str, miner: &str) -> String {
@@ -494,39 +496,39 @@ fn mine_block(coins: &str, miner: &str, nonce: &str) -> sled::Result<()> {
 		db.insert(format!("hash:{}", new_block.hash), &new_block.height.to_be_bytes())?;
 		//save lastest_block
 		db.insert("chain:latest_block", &new_block.height.to_be_bytes())?;
-	}
-
-	if let Some(latest) = db.get("chain:latest_block")? {
-		let latest_height = u64::from_be_bytes(latest.as_ref().try_into().unwrap());
-		let block_key = format!("block:{:08}", latest_height);
-		if let Some(block_data) = db.get(block_key)? {
-			let block: Block = bincode::deserialize(&block_data).unwrap();
-			//println!("Last block tx: {:?}", block.transactions);
-			
-		}
-	}
-	
-	if let Some(block) = get_16th_block() {
-        println!("16th block: {:?}", block);
-		let dtx = decode_transaction(&block.transactions);
-		match dtx {
-			Ok(tx) => {
-				let address = tx.to.map(|addr| format!("{:?}", addr)).unwrap_or("None".to_string());
-				let amount = tx.value.to_string();
-				update_balance(&address, &amount).expect("Error updating balance");
-				println!(
-					"dtx: {} -> {}",
-					address,
-					amount
-				);
-			}
-			Err(e) => {
-				eprintln!("Error processing tx: {:?}", e);
+		
+		if let Some(latest) = db.get("chain:latest_block")? {
+			let latest_height = u64::from_be_bytes(latest.as_ref().try_into().unwrap());
+			let block_key = format!("block:{:08}", latest_height);
+			if let Some(block_data) = db.get(block_key)? {
+				let block: Block = bincode::deserialize(&block_data).unwrap();
+				//println!("Last block tx: {:?}", block.transactions);
+				
 			}
 		}
-    } else {
-        println!("Could not retrieve the 16th block.");
-    }
+		
+		if let Some(block) = get_16th_block() {
+			println!("16th block: {:?}", block);
+			let dtx = decode_transaction(&block.transactions);
+			match dtx {
+				Ok(tx) => {
+					let address = tx.to.map(|addr| format!("{:?}", addr)).unwrap_or("None".to_string());
+					let amount = tx.value.to_string();
+					update_balance(&address, &amount).expect("Error updating balance");
+					println!(
+						"dtx: {} -> {}",
+						address,
+						amount
+					);
+				}
+				Err(e) => {
+					eprintln!("Error processing tx: {:?}", e);
+				}
+			}
+		} else {
+			println!("Could not retrieve the 16th block.");
+		}
+	}
 
 	Ok(())
 }
@@ -544,12 +546,38 @@ fn get_block_as_json(block_number: u64) -> Value {
     json!(null)
 }
 
+fn start_nng_server() {
+    thread::spawn(move || {
+        let socket = Socket::new(Protocol::Pub0).expect("Can't launch NNG socket");
+        socket.listen("tcp://0.0.0.0:5555").expect("Error opening NNG port (5555)");
+		let db = config::db();
+        let mut s_height = 0;
+        loop {
+			let (actual_height, _actual_hash) = get_latest_block_info();
+			if actual_height != s_height
+			{
+				let message = actual_height.to_string();
+				if let Err(e) = socket.send(message.as_bytes()) {
+					eprintln!("Error sending message");
+				} else {
+					println!("Sent new NNG block: {}", message);
+				}
+				s_height = actual_height.clone();
+			}
+            thread::sleep(Duration::from_millis(500));
+        }
+    });
+}
+
 #[tokio::main]
 async fn main() -> sled::Result<()> {
 	
     config::load_key();
     println!("Private key: {}", config::pkey());
 	println!("Address (hex): 0x{}", ethers::utils::hex::encode(config::address()));
+	
+	println!("Starting NNG server...");
+    start_nng_server();
 	
 	// i/o thread
 	thread::spawn(move || {
