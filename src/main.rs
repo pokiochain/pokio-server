@@ -270,7 +270,7 @@ fn get_latest_block_info() -> (u64, String) {
 
 fn calculate_diff(coins: u64) -> u64 {
     let result = max(1, (4.0 - (coins as f64).log(10.0).ceil()) as u64);
-    coins * (500 * result)
+    coins * (250000 * result)
 }
 
 fn get_mining_template(coins: &str, miner: &str) -> String {
