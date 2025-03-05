@@ -9,6 +9,7 @@ use sled;
 static PKEY: OnceLock<String> = OnceLock::new();
 static ETH_ADDRESS: OnceLock<Address> = OnceLock::new();
 static DB: OnceLock<sled::Db> = OnceLock::new();
+static MEMPOOLDB: OnceLock<sled::Db> = OnceLock::new();
 
 #[derive(Deserialize)]
 struct KeyFile {
@@ -28,6 +29,9 @@ pub fn load_key() {
 
     let db = sled::open("blockchain_db").expect("Failed to open blockchain database");
     DB.set(db).expect("Database was already initialized");
+	
+	let mempooldb = sled::open("mempool_db").expect("Failed to open mempool database");
+    MEMPOOLDB.set(mempooldb).expect("Mempool was already initialized");
 }
 
 pub fn pkey() -> &'static str {
@@ -40,4 +44,8 @@ pub fn address() -> Address {
 
 pub fn db() -> &'static sled::Db {
     DB.get().expect("Database not loaded")
+}
+
+pub fn mempooldb() -> &'static sled::Db {
+    MEMPOOLDB.get().expect("Database not loaded")
 }

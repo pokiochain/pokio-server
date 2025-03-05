@@ -33,6 +33,8 @@ use num_traits::Zero;
 use std::cmp::max; 
 use nng::{Socket, Protocol};
 use std::time::Duration;
+use reqwest::Client;
+use sled::IVec;
 
 mod config;
 
@@ -224,7 +226,6 @@ fn combine_and_hash(hash1: &str, hash2: &str) -> String {
 	hash(&combined)
 }
 
-
 #[derive(Serialize, Deserialize, Debug)]
 struct Block {
 	height: u64,
@@ -246,6 +247,7 @@ struct Block {
 	version: u32,
 	signature: String,
 }
+
 
 fn keccak256(data: &str) -> String {
 	let mut hasher = Keccak::v256();
@@ -294,13 +296,13 @@ fn get_mining_template(coins: &str, miner: &str) -> String {
 		)
 	};
 	
-	let coins_dec = coins.parse::<u64>().unwrap_or(0);
+	let coins_dec = max(10, coins.parse::<u64>().unwrap_or(10));
 	let diff_dec = calculate_diff(coins_dec);
 	let diff = format!("{:016X}", diff_dec);
 	
 	let nonce = 100000000 + height + 1;
 	let base_wei = BigUint::parse_bytes(b"1000000000000000000", 10).unwrap();
-	let coins_biguint = BigUint::from_str(coins).unwrap();
+	let coins_biguint = BigUint::from(coins_dec);
 	let wei_amount = coins_biguint * &base_wei;
 	let reward_amount = EthersU256::from_dec_str(&wei_amount.to_str_radix(10)).unwrap();
 	let raw_tx: String;
@@ -315,7 +317,7 @@ fn get_mining_template(coins: &str, miner: &str) -> String {
 			raw_tx = String::new();
 		}
 	}
-	format!("0000000000000000-{}-{}-{}-{}-{}-{}", coins_dec, diff, height+1, prevhash, miner, raw_tx)
+	format!("0000000000000000-{}-{}-{}-{}-{}-{}", coins_dec, diff, height+1, prevhash, miner, raw_tx).to_lowercase()
 }
 
 fn generate_reward_tx(
@@ -344,7 +346,6 @@ fn generate_reward_tx(
 fn decode_transaction(raw_tx_hex: &str) -> Result<Transaction> {
 	let raw_tx_bytes = hex::decode(raw_tx_hex.strip_prefix("0x").unwrap_or(raw_tx_hex))?;
 	let mut tx: Transaction = rlp::decode(&raw_tx_bytes)?;
-	//println!("Chain ID: {:?}", tx);
 	
 	let mut bytes = [0u8; 32];
 	tx.nonce.to_little_endian(&mut bytes);
@@ -463,7 +464,7 @@ fn mine_block(coins: &str, miner: &str, nonce: &str) -> sled::Result<()> {
 			hash: "".to_string(),
 			prev_hash: actual_hash,
 			timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
-			nonce: "".to_string(),
+			nonce: nonce.to_string(),
 			//transactions: vec!["tx1".to_string(), "tx2".to_string()],
 			transactions: block_transactions.to_string(),
 			gas_limit: 1000000,
@@ -503,9 +504,10 @@ fn mine_block(coins: &str, miner: &str, nonce: &str) -> sled::Result<()> {
 			if let Some(block_data) = db.get(block_key)? {
 				let block: Block = bincode::deserialize(&block_data).unwrap();
 				//println!("Last block tx: {:?}", block.transactions);
-				
 			}
 		}
+		
+		view_mempool();
 		
 		if let Some(block) = get_16th_block() {
 			println!("16th block: {:?}", block);
@@ -550,7 +552,6 @@ fn start_nng_server() {
     thread::spawn(move || {
         let socket = Socket::new(Protocol::Pub0).expect("Can't launch NNG socket");
         socket.listen("tcp://0.0.0.0:5555").expect("Error opening NNG port (5555)");
-		let db = config::db();
         let mut s_height = 0;
         loop {
 			let (actual_height, _actual_hash) = get_latest_block_info();
@@ -587,6 +588,38 @@ fn get_next_blocks(start_height: u64) -> Value {
     json!(blocks)
 }
 
+fn view_mempool() {
+	let mempooldb = config::mempooldb();
+    for entry in mempooldb.iter() {
+        match entry {
+            Ok((key, value)) => {
+				let tx_value_str = String::from_utf8(value.to_vec()).unwrap_or_else(|_| String::from("Invalid UTF-8"));
+                println!("rawtx Value: {:?}", tx_value_str);
+            }
+            Err(e) => {
+                eprintln!("Error reading mempool entry: {:?}", e);
+            }
+        }
+    }
+}
+
+fn store_raw_transaction(raw_tx: String) -> String {
+    let mempooldb = config::mempooldb();
+    let raw_tx_str = raw_tx.to_string();
+    mempooldb.insert(raw_tx_str.clone(), IVec::from(raw_tx_str.as_bytes()))
+        .expect("Failed to store raw transaction in sled");
+
+    mempooldb.flush().expect("Failed to flush sled database");
+    println!("Raw transaction saved: {:?}", raw_tx);
+    let dtx = decode_transaction(&raw_tx);
+    match dtx {
+        Ok(decoded_tx) => decoded_tx.hash.to_string(),
+        Err(_) => String::from("0x"),
+    }
+}
+
+
+
 #[tokio::main]
 async fn main() -> sled::Result<()> {
 	
@@ -608,6 +641,8 @@ async fn main() -> sled::Result<()> {
 		}
 	});
 	
+	tokio::spawn(sync_blocks()).await.unwrap();
+	
 	let rpc_route = warp::path("rpc")
 		.and(warp::post())
 		.and(warp::body::json())
@@ -619,14 +654,35 @@ async fn main() -> sled::Result<()> {
 			
 			let response = match method {
 				"pokio_getBlocks" => {
-					let blocks = get_next_blocks(1);
+					let block_number = data["params"]
+						.get(0)
+						.and_then(|v| v.as_str())
+						.and_then(|s| s.parse::<u64>().ok())
+						.unwrap_or(1);
+					let blocks = get_next_blocks(block_number);
 					json!({"jsonrpc": "2.0", "id": id, "result": blocks})
 				},
 				"eth_chainId" => json!({"jsonrpc": "2.0", "id": id, "result": "0x471d7"}),
+				"eth_getCode" => json!({"jsonrpc": "2.0", "id": id, "result": "0x"}),
+				"eth_estimateGas" => json!({"jsonrpc": "2.0", "id": id, "result": "0x5208"}),
+				"eth_gasPrice" => json!({"jsonrpc": "2.0", "id": id, "result": "0x27eda12b"}),
+				"eth_getTransactionCount" => json!({"jsonrpc": "2.0", "id": id, "result": "0x0"}),
 				"eth_blockNumber" => {
 					let (actual_height, actual_hash) = get_latest_block_info();
 					let block_number = format!("0x{:x}", actual_height);
 					json!({"jsonrpc": "2.0", "id": id, "result": block_number})
+				},
+				"eth_sendRawTransaction" => {
+                    let mut txhash = String::from("0x");
+
+					if let Some(params) = data["params"].as_array() {
+						if let Some(raw_tx) = params.get(0) {
+							if let Some(raw_tx_str) = raw_tx.as_str() {
+								txhash = store_raw_transaction(raw_tx_str.to_string());
+							}
+						}
+					}
+					json!({"jsonrpc": "2.0", "id": id, "result": format!("0x{}", ethers::utils::hex::encode(txhash))})
 				},
 				"eth_getBlockByNumber" => {
 					let block_number = data["params"]
@@ -756,3 +812,127 @@ async fn main() -> sled::Result<()> {
 	warp::serve(routes).run(([0, 0, 0, 0], 3030)).await;
 	Ok(())
 }
+
+async fn sync_blocks() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let client = Client::new();
+    let rpc_url = "http://pokio.xyz:3030/rpc";
+	let db = config::db();
+
+    let max_block_response = client.post(rpc_url)
+        .json(&json!({ "jsonrpc": "2.0", "id": 1, "method": "eth_blockNumber", "params": [] }))
+        .send()
+        .await?;
+
+    let max_block_json: serde_json::Value = max_block_response.json().await?;
+    let max_block = u64::from_str_radix(max_block_json["result"].as_str().unwrap().trim_start_matches("0x"), 16)?;
+
+    let blocks_response = client.post(rpc_url)
+        .json(&json!({ "jsonrpc": "2.0", "id": 1, "method": "pokio_getBlocks", "params": [1] }))
+        .send()
+        .await?;
+
+    let blocks_json: serde_json::Value = blocks_response.json().await?;
+    if let Some(blocks_array) = blocks_json["result"].as_array() {
+        let total_blocks = blocks_array.len();
+
+        for (i, block) in blocks_array.iter().enumerate() {
+            let first_block = block;
+
+            let mut new_block = Block {
+                height: first_block.get("height").and_then(|v| v.as_u64()).expect("REASON"),
+                hash: first_block.get("hash").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| String::from("")),
+                prev_hash: first_block.get("prev_hash").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| String::from("")),
+                timestamp: first_block.get("timestamp").and_then(|v| v.as_u64()).expect("REASON"),
+                nonce: first_block.get("nonce").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| String::from("0000000000000000")),
+                transactions: first_block.get("transactions").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| String::from("")),
+                gas_limit: first_block.get("gas_limit").and_then(|v| v.as_u64()).expect("REASON"),
+                gas_used: first_block.get("gas_used").and_then(|v| v.as_u64()).expect("REASON"),
+                miner: first_block.get("miner").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| String::from("")),
+                difficulty: first_block.get("difficulty").and_then(|v| v.as_u64()).expect("REASON"),
+                block_reward: first_block.get("block_reward").and_then(|v| v.as_u64()).expect("REASON"),
+                state_root: first_block.get("state_root").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| String::from("")),
+                receipts_root: first_block.get("receipts_root").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| String::from("")),
+                logs_bloom: first_block.get("logs_bloom").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| String::from("")),
+                extra_data: first_block.get("extra_data").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| String::from("")),
+                version: first_block.get("version").and_then(|v| v.as_u64()).map(|v| v as u32).expect("REASON"),
+                signature: first_block.get("signature").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| String::from("")),
+            };
+			
+			//serialize block to save in sled
+			let serialized_block = bincode::serialize(&new_block).unwrap();
+			//height as key
+			db.insert(format!("block:{:08}", new_block.height), serialized_block)?;
+			//index hash -> height
+			db.insert(format!("hash:{}", new_block.hash), &new_block.height.to_be_bytes())?;
+			//save lastest_block
+			db.insert("chain:latest_block", &new_block.height.to_be_bytes())?;
+			
+			if let Some(block) = get_16th_block() {
+				println!("16th block: {:?}", block);
+				let dtx = decode_transaction(&block.transactions);
+				match dtx {
+					Ok(tx) => {
+						let address = tx.to.map(|addr| format!("{:?}", addr)).unwrap_or("None".to_string());
+						let amount = tx.value.to_string();
+						update_balance(&address, &amount).expect("Error updating balance");
+						println!(
+							"dtx: {} -> {}",
+							address,
+							amount
+						);
+					}
+					Err(e) => {
+						eprintln!("Error processing tx: {:?}", e);
+					}
+				}
+			} else {
+				println!("Could not retrieve the 16th block.");
+			}
+
+            /*let receipts_root = merkle_tree(&new_block.transactions);
+            if receipts_root == new_block.receipts_root {
+                println!("Check merkle passed for block {}", new_block.height);
+            }  else { break; }
+			
+            let c_difficulty = calculate_diff(new_block.block_reward);
+            if c_difficulty == new_block.difficulty {
+                println!("Check diff passed for block {}", new_block.height);
+            }  else { break; }
+
+            let hash = new_block.hash.clone();
+            new_block.signature = "".to_string();
+            new_block.hash = "".to_string();
+
+            let unhashed_serialized_block = serde_json::to_string_pretty(&new_block).unwrap();
+            let block_hash = keccak256(&unhashed_serialized_block);
+
+            if hash == block_hash {
+                println!("Check hash passed for block {}", new_block.height);
+            } else { break; }
+
+            new_block.hash = block_hash;
+			
+			let diff_hex = format!("{:016X}", new_block.difficulty);
+			let mining_template = format!("{}-{}-{}-{}-{}-{}-{}", new_block.nonce, new_block.block_reward, 
+				diff_hex, new_block.height, new_block.prev_hash, new_block.miner, new_block.transactions).to_lowercase();
+			
+			println!("Diff: {}", mining_template);
+			
+			let mining_hash = pokiohash_hash(&mining_template, &new_block.nonce);
+			let mining_difficulty = hash_to_difficulty(&mining_hash) as U256;
+			
+			println!("Diff: {} {}", mining_hash, mining_difficulty);*/
+			/*
+            let unsigned_serialized_block = serde_json::to_string_pretty(&new_block).unwrap();
+            let block_signature = keccak256(&unsigned_serialized_block);
+            new_block.signature = block_signature;
+
+            let serialized_block = bincode::serialize(&new_block).unwrap();
+            let unsigned_serialized_block = serde_json::to_string_pretty(&new_block).unwrap();
+			*/
+        }
+    }
+
+    Ok(())
+}
+
