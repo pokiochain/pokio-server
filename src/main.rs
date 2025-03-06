@@ -35,49 +35,51 @@ use nng::{Socket, Protocol};
 use std::time::Duration;
 use reqwest::Client;
 use sled::IVec;
+use nng::options::protocol::pubsub::Subscribe;
+use nng::options::Options;
 
 mod config;
 
 fn update_balance(address: &str, amount_to_add: &str) -> Result<(), Box<dyn std::error::Error>> {
 	let db = config::db();
-    let address_lowercase = address.to_lowercase();
-    let address_key = address_lowercase.as_bytes();
-    if let Some(existing_balance) = db.get(address_key)? {
-        let existing_balance_str = String::from_utf8_lossy(&existing_balance);
-        let mut current_balance = BigUint::parse_bytes(existing_balance_str.as_bytes(), 10)
-            .ok_or("Error converting to BigUint")?;
-        
-        let amount_to_add_biguint = BigUint::parse_bytes(amount_to_add.as_bytes(), 10)
-            .ok_or("Error converting to BigUint")?;
-        
-        current_balance += amount_to_add_biguint;
-        db.insert(address_key, current_balance.to_string().as_bytes())?;
-    } else {
-        let initial_balance = BigUint::parse_bytes(amount_to_add.as_bytes(), 10)
-            .ok_or("Error converting to BigUint")?;
-        db.insert(address_key, initial_balance.to_string().as_bytes())?;
-    }
+	let address_lowercase = address.to_lowercase();
+	let address_key = address_lowercase.as_bytes();
+	if let Some(existing_balance) = db.get(address_key)? {
+		let existing_balance_str = String::from_utf8_lossy(&existing_balance);
+		let mut current_balance = BigUint::parse_bytes(existing_balance_str.as_bytes(), 10)
+			.ok_or("Error converting to BigUint")?;
+		
+		let amount_to_add_biguint = BigUint::parse_bytes(amount_to_add.as_bytes(), 10)
+			.ok_or("Error converting to BigUint")?;
+		
+		current_balance += amount_to_add_biguint;
+		db.insert(address_key, current_balance.to_string().as_bytes())?;
+	} else {
+		let initial_balance = BigUint::parse_bytes(amount_to_add.as_bytes(), 10)
+			.ok_or("Error converting to BigUint")?;
+		db.insert(address_key, initial_balance.to_string().as_bytes())?;
+	}
 
-    if let Some(updated_balance) = db.get(address_key)? {
-        let updated_balance_str = String::from_utf8_lossy(&updated_balance);
-        println!("Register updated {}: {}", address, updated_balance_str);
-    } else {
-        println!("Address not registered");
-    }
-    Ok(())
+	if let Some(updated_balance) = db.get(address_key)? {
+		let updated_balance_str = String::from_utf8_lossy(&updated_balance);
+		println!("Register updated {}: {}", address, updated_balance_str);
+	} else {
+		println!("Address not registered");
+	}
+	Ok(())
 }
 
 fn get_balance(address: &str) -> Result<String, Box<dyn std::error::Error>> {
-    let db = config::db();
-    let address_lowercase = address.to_lowercase();
-    let address_key = address_lowercase.as_bytes();
+	let db = config::db();
+	let address_lowercase = address.to_lowercase();
+	let address_key = address_lowercase.as_bytes();
 
-    if let Some(balance) = db.get(address_key)? {
-        let balance_str = String::from_utf8_lossy(&balance);
-        Ok(balance_str.to_string())
-    } else {
-        Ok("0".to_string())
-    }
+	if let Some(balance) = db.get(address_key)? {
+		let balance_str = String::from_utf8_lossy(&balance);
+		Ok(balance_str.to_string())
+	} else {
+		Ok("0".to_string())
+	}
 }
 
 
@@ -271,8 +273,13 @@ fn get_latest_block_info() -> (u64, String) {
 }
 
 fn calculate_diff(coins: u64) -> u64 {
-    let result = max(1, (4.0 - (coins as f64).log(10.0).ceil()) as u64);
-    coins * (250000 * result)
+	let result = max(1, (4.0 - (coins as f64).log(10.0).ceil()) as u64);
+	if coins != 1024 {
+		coins * (250000 * result)
+	}
+	else {
+		25000
+	}
 }
 
 fn get_mining_template(coins: &str, miner: &str) -> String {
@@ -301,23 +308,41 @@ fn get_mining_template(coins: &str, miner: &str) -> String {
 	let diff = format!("{:016X}", diff_dec);
 	
 	let nonce = 100000000 + height + 1;
+	
+	let fee: u64 = 3;
+	let fee_biguint = BigUint::from(fee);
+	let fee_base_wei = BigUint::parse_bytes(b"10000000000000000", 10).unwrap();
+	let fee_coins_biguint = BigUint::from(coins_dec);
+	let fee_wei_amount = fee_coins_biguint * &fee_base_wei * fee;
+	let fee_reward_amount = EthersU256::from_dec_str(&fee_wei_amount.to_str_radix(10)).unwrap();
+	let fee_raw_tx: String;
+	let signer: String;
+	signer = format!("0x{}", ethers::utils::hex::encode(config::address()));
+	
 	let base_wei = BigUint::parse_bytes(b"1000000000000000000", 10).unwrap();
 	let coins_biguint = BigUint::from(coins_dec);
-	let wei_amount = coins_biguint * &base_wei;
+	let wei_amount = (coins_biguint * &base_wei) - fee_wei_amount;
 	let reward_amount = EthersU256::from_dec_str(&wei_amount.to_str_radix(10)).unwrap();
 	let raw_tx: String;
 
 	match generate_reward_tx(config::pkey(), nonce, miner, reward_amount) {
 		Ok(tx) => {
-			//println!("Raw Signed Reward TX: 0x{}", tx);
 			raw_tx = tx;
 		}
 		Err(e) => {
-			//println!("Error generating reward transaction: {}", e);
 			raw_tx = String::new();
 		}
 	}
-	format!("0000000000000000-{}-{}-{}-{}-{}-{}", coins_dec, diff, height+1, prevhash, miner, raw_tx).to_lowercase()
+
+	match generate_reward_tx(config::pkey(), nonce, &signer, fee_reward_amount) {
+		Ok(tx) => {
+			fee_raw_tx = tx;
+		}
+		Err(e) => {
+			fee_raw_tx = String::new();
+		}
+	}
+	format!("0000000000000000-{}-{}-{}-{}-{}-{}-{}", coins_dec, diff, height+1, prevhash, miner, raw_tx, fee_raw_tx).to_lowercase()
 }
 
 fn generate_reward_tx(
@@ -400,34 +425,34 @@ fn decode_transaction(raw_tx_hex: &str) -> Result<Transaction> {
 
 fn get_16th_block() -> Option<Block> {
 	let db = config::db();
-    if let Some(latest) = db.get("chain:latest_block").unwrap() {
-        let latest_height = u64::from_be_bytes(latest.as_ref().try_into().unwrap());
-        let mut block_key = format!("block:{:08}", latest_height);
-        
-        for i in 0..16 {
-            if let Some(block_data) = db.get(&block_key).unwrap() {
-                let block: Block = bincode::deserialize(&block_data).unwrap();
-                
-                if i == 15 {
-                    return Some(block);
-                }
-                
-                if block.prev_hash.is_empty() {
-                    break;
-                }
+	if let Some(latest) = db.get("chain:latest_block").unwrap() {
+		let latest_height = u64::from_be_bytes(latest.as_ref().try_into().unwrap());
+		let mut block_key = format!("block:{:08}", latest_height);
+		
+		for i in 0..16 {
+			if let Some(block_data) = db.get(&block_key).unwrap() {
+				let block: Block = bincode::deserialize(&block_data).unwrap();
+				
+				if i == 15 {
+					return Some(block);
+				}
+				
+				if block.prev_hash.is_empty() {
+					break;
+				}
 
-                if let Some(prev_height) = db.get(format!("hash:{}", block.prev_hash)).unwrap() {
-                    let prev_height = u64::from_be_bytes(prev_height.as_ref().try_into().unwrap());
-                    block_key = format!("block:{:08}", prev_height);
-                } else {
-                    break;
-                }
-            } else {
-                break;
-            }
-        }
-    }
-    None
+				if let Some(prev_height) = db.get(format!("hash:{}", block.prev_hash)).unwrap() {
+					let prev_height = u64::from_be_bytes(prev_height.as_ref().try_into().unwrap());
+					block_key = format!("block:{:08}", prev_height);
+				} else {
+					break;
+				}
+			} else {
+				break;
+			}
+		}
+	}
+	None
 }
 
 fn mine_block(coins: &str, miner: &str, nonce: &str) -> sled::Result<()> {
@@ -451,7 +476,9 @@ fn mine_block(coins: &str, miner: &str, nonce: &str) -> sled::Result<()> {
 	let mining_hash = pokiohash_hash(&modified_password, nonce);
 	let mining_difficulty = hash_to_difficulty(&mining_hash) as U256;
 	
-	let block_transactions = parts[6];
+	let mining_transaction = parts[6];
+	let fee_transaction = parts[7];
+	let block_transactions = format!("{}-{}", mining_transaction, fee_transaction);
 
 	println!("Block found. Diff: {}, Hash: {}", mining_difficulty, mining_hash);
 	let db = config::db();
@@ -507,24 +534,26 @@ fn mine_block(coins: &str, miner: &str, nonce: &str) -> sled::Result<()> {
 			}
 		}
 		
-		view_mempool();
+		//view_mempool();
 		
 		if let Some(block) = get_16th_block() {
-			println!("16th block: {:?}", block);
-			let dtx = decode_transaction(&block.transactions);
-			match dtx {
-				Ok(tx) => {
-					let address = tx.to.map(|addr| format!("{:?}", addr)).unwrap_or("None".to_string());
-					let amount = tx.value.to_string();
-					update_balance(&address, &amount).expect("Error updating balance");
-					println!(
-						"dtx: {} -> {}",
-						address,
-						amount
-					);
-				}
-				Err(e) => {
-					eprintln!("Error processing tx: {:?}", e);
+			let transactions: Vec<&str> = block.transactions.split('-').collect();
+			for tx_str in transactions {
+				let dtx = decode_transaction(tx_str);
+				match dtx {
+					Ok(tx) => {
+						let address = tx.to.map(|addr| format!("{:?}", addr)).unwrap_or("None".to_string());
+						let amount = tx.value.to_string();
+						update_balance(&address, &amount).expect("Error updating balance");
+						println!(
+							"dtx: {} -> {}",
+							address,
+							amount
+						);
+					}
+					Err(e) => {
+						eprintln!("Error processing tx: {:?}", e);
+					}
 				}
 			}
 		} else {
@@ -536,24 +565,26 @@ fn mine_block(coins: &str, miner: &str, nonce: &str) -> sled::Result<()> {
 }
 
 fn get_block_as_json(block_number: u64) -> Value {
-    let db = config::db();
-    let block_key = format!("block:{:08}", block_number);
+	let db = config::db();
+	let block_key = format!("block:{:08}", block_number);
 
-    if let Some(block_data) = db.get(block_key).ok().flatten() {
-        if let Ok(block) = bincode::deserialize::<Block>(&block_data) {
-            return serde_json::to_value(block).unwrap()
-        }
-    }
+	if let Some(block_data) = db.get(block_key).ok().flatten() {
+		if let Ok(block) = bincode::deserialize::<Block>(&block_data) {
+			return serde_json::to_value(block).unwrap()
+		}
+	}
 
-    json!(null)
+	json!(null)
 }
 
 fn start_nng_server() {
-    thread::spawn(move || {
-        let socket = Socket::new(Protocol::Pub0).expect("Can't launch NNG socket");
-        socket.listen("tcp://0.0.0.0:5555").expect("Error opening NNG port (5555)");
-        let mut s_height = 0;
-        loop {
+	thread::spawn(move || {
+		let db = config::db();
+		let client = reqwest::blocking::Client::new();
+		let socket = Socket::new(Protocol::Pub0).expect("Can't launch NNG socket");
+		socket.listen("tcp://0.0.0.0:5555").expect("Error opening NNG port (5555)");
+		let mut s_height = 0;
+		loop {
 			let (actual_height, _actual_hash) = get_latest_block_info();
 			if actual_height != s_height
 			{
@@ -563,59 +594,210 @@ fn start_nng_server() {
 				} else {
 					println!("Sent new NNG block: {}", message);
 				}
+				
+				/*PUT BLOCK----------------------------------------------------------------------------------------
+				let block_key = format!("block:{:08}", actual_height);
+				if let Some(block_data) = db.get(block_key).expect("Failed to get block") {
+					let block: Block = bincode::deserialize(&block_data).expect("Failed to deserialize block");
+					let block_json = serde_json::to_string(&block).expect("Failed to serialize block to JSON");
+					let payload = serde_json::json!({
+						"id": "1",
+						"method": "putBlock",
+						"block": block_json
+					});
+					if let Err(e) = client.post("http://pokio.xyz:3030/mining")
+						.json(&payload)
+						.send() {
+						eprintln!("Error sending block: {}", e);
+					} else {
+						println!("Block {} sent successfully", actual_height);
+					}
+				}
+				//PUT BLOCK----------------------------------------------------------------------------------------*/
 				s_height = actual_height.clone();
 			}
-            thread::sleep(Duration::from_millis(500));
-        }
-    });
+			thread::sleep(Duration::from_millis(100));
+		}
+	});
 }
 
 fn get_next_blocks(start_height: u64) -> Value {
-    let mut blocks = Vec::new();
-    let db = config::db();
-    for i in 0..1000 {
-        let height = start_height + i;
-        let key = format!("block:{:08}", height);
+	let mut blocks = Vec::new();
+	let db = config::db();
+	for i in 0..1000 {
+		let height = start_height + i;
+		let key = format!("block:{:08}", height);
 
-        if let Some(serialized_block) = db.get(&key).unwrap() {
-            if let Ok(block) = bincode::deserialize::<Block>(&serialized_block) {
-                blocks.push(block);
-            }
-        } else {
-            break;
-        }
-    }
-    json!(blocks)
+		if let Some(serialized_block) = db.get(&key).unwrap() {
+			if let Ok(block) = bincode::deserialize::<Block>(&serialized_block) {
+				blocks.push(block);
+			}
+		} else {
+			break;
+		}
+	}
+	json!(blocks)
 }
 
 fn view_mempool() {
 	let mempooldb = config::mempooldb();
-    for entry in mempooldb.iter() {
-        match entry {
-            Ok((key, value)) => {
+	for entry in mempooldb.iter() {
+		match entry {
+			Ok((key, value)) => {
 				let tx_value_str = String::from_utf8(value.to_vec()).unwrap_or_else(|_| String::from("Invalid UTF-8"));
-                println!("rawtx Value: {:?}", tx_value_str);
-            }
-            Err(e) => {
-                eprintln!("Error reading mempool entry: {:?}", e);
-            }
-        }
-    }
+				println!("rawtx Value: {:?}", tx_value_str);
+			}
+			Err(e) => {
+				eprintln!("Error reading mempool entry: {:?}", e);
+			}
+		}
+	}
 }
 
 fn store_raw_transaction(raw_tx: String) -> String {
-    let mempooldb = config::mempooldb();
-    let raw_tx_str = raw_tx.to_string();
-    mempooldb.insert(raw_tx_str.clone(), IVec::from(raw_tx_str.as_bytes()))
-        .expect("Failed to store raw transaction in sled");
+	let mempooldb = config::mempooldb();
+	let raw_tx_str = raw_tx.to_string();
+	mempooldb.insert(raw_tx_str.clone(), IVec::from(raw_tx_str.as_bytes()))
+		.expect("Failed to store raw transaction in sled");
 
-    mempooldb.flush().expect("Failed to flush sled database");
-    println!("Raw transaction saved: {:?}", raw_tx);
-    let dtx = decode_transaction(&raw_tx);
-    match dtx {
-        Ok(decoded_tx) => decoded_tx.hash.to_string(),
-        Err(_) => String::from("0x"),
-    }
+	mempooldb.flush().expect("Failed to flush sled database");
+	println!("Raw transaction saved: {:?}", raw_tx);
+	let dtx = decode_transaction(&raw_tx);
+	match dtx {
+		Ok(decoded_tx) => decoded_tx.hash.to_string(),
+		Err(_) => String::from("0x"),
+	}
+}
+
+fn connect_to_nng_server(pserver: String) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+	let client = Client::new();
+	let rpc_url = "http://pokio.xyz:3030/rpc";
+	let db = config::db();
+
+	thread::spawn(move || {
+		let rt = tokio::runtime::Runtime::new().unwrap();
+		rt.block_on(async move {
+			let socket = Socket::new(Protocol::Sub0).expect("Can't connect to NNG server");
+			let _ = socket.set_opt::<Subscribe>(vec![]);
+			let nng_url = format!("tcp://{}:5555", pserver);
+			
+			socket
+				.dial(&nng_url)
+				.expect("Can't connect to NNG server");
+			println!("Connected to NNG server");
+
+			loop {
+				match socket.recv() {
+					Ok(_msg) => {
+						let (actual_height, _actual_hash) = get_latest_block_info();
+
+						let blocks_response = match client
+							.post(rpc_url)
+							.json(&json!({
+								"jsonrpc": "2.0",
+								"id": 1,
+								"method": "pokio_getBlocks",
+								"params": [(actual_height + 1).to_string()]
+							}))
+							.send()
+							.await
+						{
+							Ok(response) => response,
+							Err(e) => {
+								eprintln!("Error fetching blocks: {:?}", e);
+								continue;
+							}
+						};
+
+						let blocks_json: serde_json::Value = match blocks_response.json().await {
+							Ok(json) => json,
+							Err(e) => {
+								eprintln!("Error parsing blocks response: {:?}", e);
+								continue;
+							}
+						};
+
+						if let Some(blocks_array) = blocks_json["result"].as_array() {
+							for block in blocks_array {
+								let new_block = Block {
+									height: block.get("height").and_then(|v| v.as_u64()).expect("Missing height"),
+									hash: block.get("hash").and_then(|v| v.as_str()).map_or_else(|| "".to_string(), String::from),
+									prev_hash: block.get("prev_hash").and_then(|v| v.as_str()).map_or_else(|| "".to_string(), String::from),
+									timestamp: block.get("timestamp").and_then(|v| v.as_u64()).expect("Missing timestamp"),
+									nonce: block.get("nonce").and_then(|v| v.as_str()).map_or_else(|| "0000000000000000".to_string(), String::from),
+									transactions: block.get("transactions").and_then(|v| v.as_str()).map_or_else(|| "".to_string(), String::from),
+									gas_limit: block.get("gas_limit").and_then(|v| v.as_u64()).expect("Missing gas_limit"),
+									gas_used: block.get("gas_used").and_then(|v| v.as_u64()).expect("Missing gas_used"),
+									miner: block.get("miner").and_then(|v| v.as_str()).map_or_else(|| "".to_string(), String::from),
+									difficulty: block.get("difficulty").and_then(|v| v.as_u64()).expect("Missing difficulty"),
+									block_reward: block.get("block_reward").and_then(|v| v.as_u64()).expect("Missing block_reward"),
+									state_root: block.get("state_root").and_then(|v| v.as_str()).map_or_else(|| "".to_string(), String::from),
+									receipts_root: block.get("receipts_root").and_then(|v| v.as_str()).map_or_else(|| "".to_string(), String::from),
+									logs_bloom: block.get("logs_bloom").and_then(|v| v.as_str()).map_or_else(|| "".to_string(), String::from),
+									extra_data: block.get("extra_data").and_then(|v| v.as_str()).map_or_else(|| "".to_string(), String::from),
+									version: block.get("version").and_then(|v| v.as_u64()).map(|v| v as u32).expect("Missing version"),
+									signature: block.get("signature").and_then(|v| v.as_str()).map_or_else(|| "".to_string(), String::from),
+								};
+
+								let serialized_block = match bincode::serialize(&new_block) {
+									Ok(data) => data,
+									Err(e) => {
+										eprintln!("Error serializing block: {:?}", e);
+										continue;
+									}
+								};
+
+								if let Err(e) = db.insert(format!("block:{:08}", new_block.height), serialized_block) {
+									eprintln!("Error inserting block into DB: {:?}", e);
+									continue;
+								}
+
+								if let Err(e) = db.insert(format!("hash:{}", new_block.hash), &new_block.height.to_be_bytes()) {
+									eprintln!("Error inserting hash index: {:?}", e);
+									continue;
+								}
+
+								if let Err(e) = db.insert("chain:latest_block", &new_block.height.to_be_bytes()) {
+									eprintln!("Error updating latest block: {:?}", e);
+									continue;
+								}
+
+								if let Some(block) = get_16th_block() {
+									let transactions: Vec<&str> = block.transactions.split('-').collect();
+									for tx_str in transactions {
+										let dtx = decode_transaction(tx_str);
+										match dtx {
+											Ok(tx) => {
+												let address = tx.to.map(|addr| format!("{:?}", addr)).unwrap_or("None".to_string());
+												let amount = tx.value.to_string();
+												update_balance(&address, &amount).expect("Error updating balance");
+												println!(
+													"dtx: {} -> {}",
+													address,
+													amount
+												);
+											}
+											Err(e) => {
+												eprintln!("Error processing tx: {:?}", e);
+											}
+										}
+									}
+								} else {
+									println!("Could not retrieve the 16th block.");
+								}
+							}
+						}
+					}
+					Err(e) => {
+						eprintln!("Error receiving NNG message: {}", e);
+					}
+				}
+				thread::sleep(Duration::from_millis(100));
+			}
+		});
+	});
+
+	Ok(())
 }
 
 
@@ -623,12 +805,12 @@ fn store_raw_transaction(raw_tx: String) -> String {
 #[tokio::main]
 async fn main() -> sled::Result<()> {
 	
-    config::load_key();
-    println!("Private key: {}", config::pkey());
+	config::load_key();
+	println!("Private key: {}", config::pkey());
 	println!("Address (hex): 0x{}", ethers::utils::hex::encode(config::address()));
 	
 	println!("Starting NNG server...");
-    start_nng_server();
+	start_nng_server();
 	
 	// i/o thread
 	thread::spawn(move || {
@@ -641,7 +823,14 @@ async fn main() -> sled::Result<()> {
 		}
 	});
 	
-	tokio::spawn(sync_blocks()).await.unwrap();
+	/*tokio::spawn(full_sync_blocks()).await.unwrap();*/
+	
+	println!("Sync ended. Starting server...");
+
+	/*tokio::spawn(async {
+		connect_to_nng_server("pokio.xyz".to_string());
+	});*/
+
 	
 	let rpc_route = warp::path("rpc")
 		.and(warp::post())
@@ -673,7 +862,7 @@ async fn main() -> sled::Result<()> {
 					json!({"jsonrpc": "2.0", "id": id, "result": block_number})
 				},
 				"eth_sendRawTransaction" => {
-                    let mut txhash = String::from("0x");
+					let mut txhash = String::from("0x");
 
 					if let Some(params) = data["params"].as_array() {
 						if let Some(raw_tx) = params.get(0) {
@@ -800,6 +989,10 @@ async fn main() -> sled::Result<()> {
 					let _ = mine_block(coins, miner, nonce);
 					json!({"jsonrpc": "2.0", "id": id, "result": "ok"})
 				},
+				"putBlock" => {
+					println!("Received block: {:?}", data["block"]);
+					json!({"jsonrpc": "2.0", "id": id, "result": "ok"})
+				},
 				_ => json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32600, "message": "The method does not exist/is not available"}}),
 			};
 			
@@ -813,126 +1006,142 @@ async fn main() -> sled::Result<()> {
 	Ok(())
 }
 
-async fn sync_blocks() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let client = Client::new();
-    let rpc_url = "http://pokio.xyz:3030/rpc";
+async fn full_sync_blocks() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+	let client = Client::new();
+	let rpc_url = "http://pokio.xyz:3030/rpc";
 	let db = config::db();
 
-    let max_block_response = client.post(rpc_url)
-        .json(&json!({ "jsonrpc": "2.0", "id": 1, "method": "eth_blockNumber", "params": [] }))
-        .send()
-        .await?;
 
-    let max_block_json: serde_json::Value = max_block_response.json().await?;
-    let max_block = u64::from_str_radix(max_block_json["result"].as_str().unwrap().trim_start_matches("0x"), 16)?;
+	loop {
+		let max_block_response = client.post(rpc_url)
+			.json(&json!({ "jsonrpc": "2.0", "id": 1, "method": "eth_blockNumber", "params": [] }))
+			.send()
+			.await?;
 
-    let blocks_response = client.post(rpc_url)
-        .json(&json!({ "jsonrpc": "2.0", "id": 1, "method": "pokio_getBlocks", "params": [1] }))
-        .send()
-        .await?;
+		let max_block_json: serde_json::Value = max_block_response.json().await?;
+		let max_block = u64::from_str_radix(max_block_json["result"].as_str().unwrap().trim_start_matches("0x"), 16)?;
+		
+		let (mut actual_height, mut actual_hash) = get_latest_block_info();
+		
+		//println!("VERSUS OF HEIGHTS! {} < {}", actual_height, max_block);
+		
+		while actual_height < max_block {
+		
+			let blocks_response = client.post(rpc_url)
+				.json(&json!({ "jsonrpc": "2.0", "id": 1, "method": "pokio_getBlocks", "params": [(actual_height+1).to_string()] }))
+				.send()
+				.await?;
 
-    let blocks_json: serde_json::Value = blocks_response.json().await?;
-    if let Some(blocks_array) = blocks_json["result"].as_array() {
-        let total_blocks = blocks_array.len();
+			let blocks_json: serde_json::Value = blocks_response.json().await?;
+			if let Some(blocks_array) = blocks_json["result"].as_array() {
+				let total_blocks = blocks_array.len();
 
-        for (i, block) in blocks_array.iter().enumerate() {
-            let first_block = block;
+				for (i, block) in blocks_array.iter().enumerate() {
+					let first_block = block;
 
-            let mut new_block = Block {
-                height: first_block.get("height").and_then(|v| v.as_u64()).expect("REASON"),
-                hash: first_block.get("hash").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| String::from("")),
-                prev_hash: first_block.get("prev_hash").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| String::from("")),
-                timestamp: first_block.get("timestamp").and_then(|v| v.as_u64()).expect("REASON"),
-                nonce: first_block.get("nonce").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| String::from("0000000000000000")),
-                transactions: first_block.get("transactions").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| String::from("")),
-                gas_limit: first_block.get("gas_limit").and_then(|v| v.as_u64()).expect("REASON"),
-                gas_used: first_block.get("gas_used").and_then(|v| v.as_u64()).expect("REASON"),
-                miner: first_block.get("miner").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| String::from("")),
-                difficulty: first_block.get("difficulty").and_then(|v| v.as_u64()).expect("REASON"),
-                block_reward: first_block.get("block_reward").and_then(|v| v.as_u64()).expect("REASON"),
-                state_root: first_block.get("state_root").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| String::from("")),
-                receipts_root: first_block.get("receipts_root").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| String::from("")),
-                logs_bloom: first_block.get("logs_bloom").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| String::from("")),
-                extra_data: first_block.get("extra_data").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| String::from("")),
-                version: first_block.get("version").and_then(|v| v.as_u64()).map(|v| v as u32).expect("REASON"),
-                signature: first_block.get("signature").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| String::from("")),
-            };
-			
-			//serialize block to save in sled
-			let serialized_block = bincode::serialize(&new_block).unwrap();
-			//height as key
-			db.insert(format!("block:{:08}", new_block.height), serialized_block)?;
-			//index hash -> height
-			db.insert(format!("hash:{}", new_block.hash), &new_block.height.to_be_bytes())?;
-			//save lastest_block
-			db.insert("chain:latest_block", &new_block.height.to_be_bytes())?;
-			
-			if let Some(block) = get_16th_block() {
-				println!("16th block: {:?}", block);
-				let dtx = decode_transaction(&block.transactions);
-				match dtx {
-					Ok(tx) => {
-						let address = tx.to.map(|addr| format!("{:?}", addr)).unwrap_or("None".to_string());
-						let amount = tx.value.to_string();
-						update_balance(&address, &amount).expect("Error updating balance");
-						println!(
-							"dtx: {} -> {}",
-							address,
-							amount
-						);
+					let mut new_block = Block {
+						height: first_block.get("height").and_then(|v| v.as_u64()).expect("REASON"),
+						hash: first_block.get("hash").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| String::from("")),
+						prev_hash: first_block.get("prev_hash").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| String::from("")),
+						timestamp: first_block.get("timestamp").and_then(|v| v.as_u64()).expect("REASON"),
+						nonce: first_block.get("nonce").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| String::from("0000000000000000")),
+						transactions: first_block.get("transactions").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| String::from("")),
+						gas_limit: first_block.get("gas_limit").and_then(|v| v.as_u64()).expect("REASON"),
+						gas_used: first_block.get("gas_used").and_then(|v| v.as_u64()).expect("REASON"),
+						miner: first_block.get("miner").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| String::from("")),
+						difficulty: first_block.get("difficulty").and_then(|v| v.as_u64()).expect("REASON"),
+						block_reward: first_block.get("block_reward").and_then(|v| v.as_u64()).expect("REASON"),
+						state_root: first_block.get("state_root").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| String::from("")),
+						receipts_root: first_block.get("receipts_root").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| String::from("")),
+						logs_bloom: first_block.get("logs_bloom").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| String::from("")),
+						extra_data: first_block.get("extra_data").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| String::from("")),
+						version: first_block.get("version").and_then(|v| v.as_u64()).map(|v| v as u32).expect("REASON"),
+						signature: first_block.get("signature").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| String::from("")),
+					};
+					
+					//serialize block to save in sled
+					let serialized_block = bincode::serialize(&new_block).unwrap();
+					//height as key
+					db.insert(format!("block:{:08}", new_block.height), serialized_block)?;
+					//index hash -> height
+					db.insert(format!("hash:{}", new_block.hash), &new_block.height.to_be_bytes())?;
+					//save lastest_block
+					db.insert("chain:latest_block", &new_block.height.to_be_bytes())?;
+					
+					if let Some(block) = get_16th_block() {
+						println!("16th block: {:?}", block);
+						let transactions: Vec<&str> = block.transactions.split('-').collect();
+						for tx_str in transactions {
+							let dtx = decode_transaction(tx_str);
+							match dtx {
+								Ok(tx) => {
+									let address = tx.to.map(|addr| format!("{:?}", addr)).unwrap_or("None".to_string());
+									let amount = tx.value.to_string();
+									update_balance(&address, &amount).expect("Error updating balance");
+									println!(
+										"dtx: {} -> {}",
+										address,
+										amount
+									);
+								}
+								Err(e) => {
+									eprintln!("Error processing tx: {:?}", e);
+								}
+							}
+						}
+					} else {
+						println!("Could not retrieve the 16th block.");
 					}
-					Err(e) => {
-						eprintln!("Error processing tx: {:?}", e);
-					}
+
+					/*let receipts_root = merkle_tree(&new_block.transactions);
+					if receipts_root == new_block.receipts_root {
+						println!("Check merkle passed for block {}", new_block.height);
+					}  else { break; }
+					
+					let c_difficulty = calculate_diff(new_block.block_reward);
+					if c_difficulty == new_block.difficulty {
+						println!("Check diff passed for block {}", new_block.height);
+					}  else { break; }
+
+					let hash = new_block.hash.clone();
+					new_block.signature = "".to_string();
+					new_block.hash = "".to_string();
+
+					let unhashed_serialized_block = serde_json::to_string_pretty(&new_block).unwrap();
+					let block_hash = keccak256(&unhashed_serialized_block);
+
+					if hash == block_hash {
+						println!("Check hash passed for block {}", new_block.height);
+					} else { break; }
+
+					new_block.hash = block_hash;
+					
+					let diff_hex = format!("{:016X}", new_block.difficulty);
+					let mining_template = format!("{}-{}-{}-{}-{}-{}-{}", new_block.nonce, new_block.block_reward, 
+						diff_hex, new_block.height, new_block.prev_hash, new_block.miner, new_block.transactions).to_lowercase();
+					
+					println!("Diff: {}", mining_template);
+					
+					let mining_hash = pokiohash_hash(&mining_template, &new_block.nonce);
+					let mining_difficulty = hash_to_difficulty(&mining_hash) as U256;
+					
+					println!("Diff: {} {}", mining_hash, mining_difficulty);*/
+					/*
+					let unsigned_serialized_block = serde_json::to_string_pretty(&new_block).unwrap();
+					let block_signature = keccak256(&unsigned_serialized_block);
+					new_block.signature = block_signature;
+
+					let serialized_block = bincode::serialize(&new_block).unwrap();
+					let unsigned_serialized_block = serde_json::to_string_pretty(&new_block).unwrap();
+					*/
 				}
-			} else {
-				println!("Could not retrieve the 16th block.");
 			}
-
-            /*let receipts_root = merkle_tree(&new_block.transactions);
-            if receipts_root == new_block.receipts_root {
-                println!("Check merkle passed for block {}", new_block.height);
-            }  else { break; }
-			
-            let c_difficulty = calculate_diff(new_block.block_reward);
-            if c_difficulty == new_block.difficulty {
-                println!("Check diff passed for block {}", new_block.height);
-            }  else { break; }
-
-            let hash = new_block.hash.clone();
-            new_block.signature = "".to_string();
-            new_block.hash = "".to_string();
-
-            let unhashed_serialized_block = serde_json::to_string_pretty(&new_block).unwrap();
-            let block_hash = keccak256(&unhashed_serialized_block);
-
-            if hash == block_hash {
-                println!("Check hash passed for block {}", new_block.height);
-            } else { break; }
-
-            new_block.hash = block_hash;
-			
-			let diff_hex = format!("{:016X}", new_block.difficulty);
-			let mining_template = format!("{}-{}-{}-{}-{}-{}-{}", new_block.nonce, new_block.block_reward, 
-				diff_hex, new_block.height, new_block.prev_hash, new_block.miner, new_block.transactions).to_lowercase();
-			
-			println!("Diff: {}", mining_template);
-			
-			let mining_hash = pokiohash_hash(&mining_template, &new_block.nonce);
-			let mining_difficulty = hash_to_difficulty(&mining_hash) as U256;
-			
-			println!("Diff: {} {}", mining_hash, mining_difficulty);*/
-			/*
-            let unsigned_serialized_block = serde_json::to_string_pretty(&new_block).unwrap();
-            let block_signature = keccak256(&unsigned_serialized_block);
-            new_block.signature = block_signature;
-
-            let serialized_block = bincode::serialize(&new_block).unwrap();
-            let unsigned_serialized_block = serde_json::to_string_pretty(&new_block).unwrap();
-			*/
-        }
-    }
-
-    Ok(())
+			(actual_height, actual_hash) = get_latest_block_info();
+		}
+		break;
+		//thread::sleep(Duration::from_millis(10000));
+	}
+	println!("SYNC ENDED NOW!");
+	Ok(())
 }
 
