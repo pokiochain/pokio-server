@@ -37,6 +37,7 @@ use reqwest::Client;
 use sled::IVec;
 use nng::options::protocol::pubsub::Subscribe;
 use nng::options::Options;
+use std::error::Error;
 
 mod config;
 
@@ -518,6 +519,7 @@ fn mine_block(coins: &str, miner: &str, nonce: &str) -> sled::Result<()> {
 		new_block.signature = block_signature;
 		//serialize block to save in sled
 		let serialized_block = bincode::serialize(&new_block).unwrap();
+		let sync_height = new_block.height;
 		//height as key
 		db.insert(format!("block:{:08}", new_block.height), serialized_block)?;
 		//index hash -> height
@@ -558,11 +560,132 @@ fn mine_block(coins: &str, miner: &str, nonce: &str) -> sled::Result<()> {
 			}
 		} else {
 			println!("Could not retrieve the 16th block.");
+			println!("------------RESYNC------------");
+			tokio::spawn(async move {
+                sync_from_block(sync_height-10).await;
+            });
+			println!("----------ENDRESYNC-----------");
 		}
 	}
 
 	Ok(())
 }
+
+async fn sync_from_block(height: u64) {
+	let db = config::db();
+	let client = Client::new();
+	let rpc_url = "http://62.113.200.176:3030/rpc";
+    loop {
+        let blocks_response = match client
+            .post(rpc_url)
+            .json(&json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "pokio_getBlocks",
+                "params": [height.to_string()]
+            }))
+            .send()
+            .await
+        {
+            Ok(response) => response,
+            Err(e) => {
+                eprintln!("Error fetching blocks: {:?}", e);
+                continue;
+            }
+        };
+
+        let blocks_json: serde_json::Value = match blocks_response.json().await {
+            Ok(json) => json,
+            Err(e) => {
+                eprintln!("Error parsing blocks response: {:?}", e);
+                continue;
+            }
+        };
+
+        if let Some(blocks_array) = blocks_json["result"].as_array() {
+            for block in blocks_array {
+                let new_block = Block {
+                    height: block.get("height").and_then(|v| v.as_u64()).expect("Missing height"),
+                    hash: block.get("hash").and_then(|v| v.as_str()).map_or_else(|| "".to_string(), String::from),
+                    prev_hash: block.get("prev_hash").and_then(|v| v.as_str()).map_or_else(|| "".to_string(), String::from),
+                    timestamp: block.get("timestamp").and_then(|v| v.as_u64()).expect("Missing timestamp"),
+                    nonce: block.get("nonce").and_then(|v| v.as_str()).map_or_else(|| "0000000000000000".to_string(), String::from),
+                    transactions: block.get("transactions").and_then(|v| v.as_str()).map_or_else(|| "".to_string(), String::from),
+                    gas_limit: block.get("gas_limit").and_then(|v| v.as_u64()).expect("Missing gas_limit"),
+                    gas_used: block.get("gas_used").and_then(|v| v.as_u64()).expect("Missing gas_used"),
+                    miner: block.get("miner").and_then(|v| v.as_str()).map_or_else(|| "".to_string(), String::from),
+                    difficulty: block.get("difficulty").and_then(|v| v.as_u64()).expect("Missing difficulty"),
+                    block_reward: block.get("block_reward").and_then(|v| v.as_u64()).expect("Missing block_reward"),
+                    state_root: block.get("state_root").and_then(|v| v.as_str()).map_or_else(|| "".to_string(), String::from),
+                    receipts_root: block.get("receipts_root").and_then(|v| v.as_str()).map_or_else(|| "".to_string(), String::from),
+                    logs_bloom: block.get("logs_bloom").and_then(|v| v.as_str()).map_or_else(|| "".to_string(), String::from),
+                    extra_data: block.get("extra_data").and_then(|v| v.as_str()).map_or_else(|| "".to_string(), String::from),
+                    version: block.get("version").and_then(|v| v.as_u64()).map(|v| v as u32).expect("Missing version"),
+                    signature: block.get("signature").and_then(|v| v.as_str()).map_or_else(|| "".to_string(), String::from),
+                };
+
+                let serialized_block = match bincode::serialize(&new_block) {
+                    Ok(data) => data,
+                    Err(e) => {
+                        eprintln!("Error serializing block: {:?}", e);
+                        continue;
+                    }
+                };
+
+                db.insert(format!("block:{:08}", new_block.height), serialized_block);
+                db.insert(format!("hash:{}", new_block.hash), new_block.height.to_be_bytes().to_vec());
+                db.insert("chain:latest_block".to_string(), new_block.height.to_be_bytes().to_vec());
+            }
+        }
+    }
+}
+
+fn save_block_to_db(new_block: &Block) -> Result<(), Box<dyn Error>> {
+    let db = config::db();
+	let (actual_height, prev_hash) = get_latest_block_info();
+	let expected_height: u64 = actual_height + 1;
+	//println!("{} vs {} || {} vs {}", expected_height, new_block.height, prev_hash, new_block.prev_hash);
+	if expected_height == new_block.height && prev_hash == new_block.prev_hash {
+		let serialized_block = bincode::serialize(new_block)?;
+		let sync_height = new_block.height;
+		db.insert(format!("block:{:08}", new_block.height), serialized_block)?;
+		db.insert(format!("hash:{}", new_block.hash), &new_block.height.to_be_bytes())?;
+		db.insert("chain:latest_block", &new_block.height.to_be_bytes())?;
+		println!("Block {} successfully saved in DB", new_block.height);
+		
+		if let Some(block) = get_16th_block() {
+			let transactions: Vec<&str> = block.transactions.split('-').collect();
+			for tx_str in transactions {
+				let dtx = decode_transaction(tx_str);
+				match dtx {
+					Ok(tx) => {
+						let address = tx.to.map(|addr| format!("{:?}", addr)).unwrap_or("None".to_string());
+						let amount = tx.value.to_string();
+						update_balance(&address, &amount).expect("Error updating balance");
+						println!(
+							"dtx: {} -> {}",
+							address,
+							amount
+						);
+					}
+					Err(e) => {
+						eprintln!("Error processing tx: {:?}", e);
+					}
+				}
+			}
+		} else {
+			println!("Could not retrieve the 16th block.");
+			println!("------------RESYNC------------");
+			tokio::spawn(async move {
+                sync_from_block(sync_height-10).await;
+            });
+			println!("----------ENDRESYNC-----------");
+		}
+	}
+	
+    Ok(())
+}
+
 
 fn get_block_as_json(block_number: u64) -> Value {
 	let db = config::db();
@@ -595,28 +718,58 @@ fn start_nng_server() {
 					println!("Sent new NNG block: {}", message);
 				}
 				
-				/*PUT BLOCK----------------------------------------------------------------------------------------
+				//PUT BLOCK----------------------------------------------------------------------------------------
 				let block_key = format!("block:{:08}", actual_height);
 				if let Some(block_data) = db.get(block_key).expect("Failed to get block") {
 					let block: Block = bincode::deserialize(&block_data).expect("Failed to deserialize block");
-					let block_json = serde_json::to_string(&block).expect("Failed to serialize block to JSON");
-					let payload = serde_json::json!({
-						"id": "1",
-						"method": "putBlock",
-						"block": block_json
-					});
-					if let Err(e) = client.post("http://pokio.xyz:3030/mining")
-						.json(&payload)
-						.send() {
-						eprintln!("Error sending block: {}", e);
+					let transactions: Vec<&str> = block.transactions.split('-').collect();
+					let mut own_block: u64 = 0;
+					if let Some(&tx_str) = transactions.get(0) {
+						match decode_transaction(tx_str) {
+							Ok(tx) => {
+								let signer_address = format!("0x{}", hex::encode(tx.from));
+								let own_address = format!("0x{}", ethers::utils::hex::encode(config::address()));
+								println!("ADDRESSES: {} {}", signer_address, own_address);
+								if signer_address == own_address {
+									own_block = 1;
+								} else { 
+									own_block = 0;
+								}
+							}
+							Err(e) => {
+								eprintln!("Error processing tx: {:?}", e);
+								own_block = 0;
+							}
+						}
+					}
+					
+					if own_block == 1 {
+						let block_json = serde_json::to_string(&block).expect("Failed to serialize block to JSON");
+						let payload = serde_json::json!({
+							"id": "1",
+							"method": "putBlock",
+							"block": block_json
+						});
+							match client.post("http://62.113.200.176:3030/mining")
+								.json(&payload)
+								.send()
+							{
+								Ok(response) => {
+									match response.text() {
+										Ok(text) => println!("Response: {}", text),
+										Err(e) => eprintln!("Error reading response: {}", e),
+									}
+								}
+								Err(e) => eprintln!("Error sending block: {}", e),
+							}
 					} else {
-						println!("Block {} sent successfully", actual_height);
+						println!("Block not sent");
 					}
 				}
-				//PUT BLOCK----------------------------------------------------------------------------------------*/
+				//PUT BLOCK----------------------------------------------------------------------------------------
 				s_height = actual_height.clone();
 			}
-			thread::sleep(Duration::from_millis(100));
+			thread::sleep(Duration::from_millis(25));
 		}
 	});
 }
@@ -671,7 +824,7 @@ fn store_raw_transaction(raw_tx: String) -> String {
 
 fn connect_to_nng_server(pserver: String) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 	let client = Client::new();
-	let rpc_url = "http://pokio.xyz:3030/rpc";
+	let rpc_url = "http://62.113.200.176:3030/rpc";
 	let db = config::db();
 
 	thread::spawn(move || {
@@ -792,7 +945,7 @@ fn connect_to_nng_server(pserver: String) -> Result<(), Box<dyn std::error::Erro
 						eprintln!("Error receiving NNG message: {}", e);
 					}
 				}
-				thread::sleep(Duration::from_millis(100));
+				thread::sleep(Duration::from_millis(25));
 			}
 		});
 	});
@@ -823,20 +976,20 @@ async fn main() -> sled::Result<()> {
 		}
 	});
 	
-	/*tokio::spawn(full_sync_blocks()).await.unwrap();*/
+	tokio::spawn(full_sync_blocks()).await.unwrap();
 	
 	println!("Sync ended. Starting server...");
 
-	/*tokio::spawn(async {
-		connect_to_nng_server("pokio.xyz".to_string());
-	});*/
+	tokio::spawn(async {
+		connect_to_nng_server("62.113.200.176".to_string());
+	});
 
 	
 	let rpc_route = warp::path("rpc")
 		.and(warp::post())
 		.and(warp::body::json())
 		.map(|data: serde_json::Value| {
-			println!("Received JSON: {}", data);
+			//println!("Received JSON: {}", data);
 			
 			let id = data["id"].as_str().unwrap_or("unknown");
 			let method = data["method"].as_str().unwrap_or("");
@@ -990,8 +1143,44 @@ async fn main() -> sled::Result<()> {
 					json!({"jsonrpc": "2.0", "id": id, "result": "ok"})
 				},
 				"putBlock" => {
-					println!("Received block: {:?}", data["block"]);
-					json!({"jsonrpc": "2.0", "id": id, "result": "ok"})
+					
+					match serde_json::from_value::<String>(data["block"].clone()) {
+						Ok(block_str) => {
+							match serde_json::from_str::<serde_json::Value>(&block_str) {
+								Ok(block_json) => {
+									let new_block = Block {
+										height: block_json.get("height").and_then(|v| v.as_u64()).expect("Missing height"),
+										hash: block_json.get("hash").and_then(|v| v.as_str()).map_or_else(|| "".to_string(), String::from),
+										prev_hash: block_json.get("prev_hash").and_then(|v| v.as_str()).map_or_else(|| "".to_string(), String::from),
+										timestamp: block_json.get("timestamp").and_then(|v| v.as_u64()).expect("Missing timestamp"),
+										nonce: block_json.get("nonce").and_then(|v| v.as_str()).map_or_else(|| "0000000000000000".to_string(), String::from),
+										transactions: block_json.get("transactions").and_then(|v| v.as_str()).map_or_else(|| "".to_string(), String::from),
+										gas_limit: block_json.get("gas_limit").and_then(|v| v.as_u64()).expect("Missing gas_limit"),
+										gas_used: block_json.get("gas_used").and_then(|v| v.as_u64()).expect("Missing gas_used"),
+										miner: block_json.get("miner").and_then(|v| v.as_str()).map_or_else(|| "".to_string(), String::from),
+										difficulty: block_json.get("difficulty").and_then(|v| v.as_u64()).expect("Missing difficulty"),
+										block_reward: block_json.get("block_reward").and_then(|v| v.as_u64()).expect("Missing block_reward"),
+										state_root: block_json.get("state_root").and_then(|v| v.as_str()).map_or_else(|| "".to_string(), String::from),
+										receipts_root: block_json.get("receipts_root").and_then(|v| v.as_str()).map_or_else(|| "".to_string(), String::from),
+										logs_bloom: block_json.get("logs_bloom").and_then(|v| v.as_str()).map_or_else(|| "".to_string(), String::from),
+										extra_data: block_json.get("extra_data").and_then(|v| v.as_str()).map_or_else(|| "".to_string(), String::from),
+										version: block_json.get("version").and_then(|v| v.as_u64()).map(|v| v as u32).expect("Missing version"),
+										signature: block_json.get("signature").and_then(|v| v.as_str()).map_or_else(|| "".to_string(), String::from),
+									};
+									
+									println!("Newblock: {:?}", new_block.height);
+									
+									if let Err(e) = save_block_to_db(&new_block) {
+										eprintln!("Error saving block: {}", e);
+									}
+								
+									json!({"jsonrpc": "2.0", "id": id, "result": "ok"})
+								}
+								Err(_) => json!({"jsonrpc": "2.0", "id": id, "result": "error"}),
+							}
+						}
+						Err(_) => json!({"jsonrpc": "2.0", "id": id, "result": "error"}),
+					}
 				},
 				_ => json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32600, "message": "The method does not exist/is not available"}}),
 			};
@@ -1008,7 +1197,7 @@ async fn main() -> sled::Result<()> {
 
 async fn full_sync_blocks() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 	let client = Client::new();
-	let rpc_url = "http://pokio.xyz:3030/rpc";
+	let rpc_url = "http://62.113.200.176:3030/rpc";
 	let db = config::db();
 
 
@@ -1023,7 +1212,7 @@ async fn full_sync_blocks() -> Result<(), Box<dyn std::error::Error + Send + Syn
 		
 		let (mut actual_height, mut actual_hash) = get_latest_block_info();
 		
-		//println!("VERSUS OF HEIGHTS! {} < {}", actual_height, max_block);
+		//println!("height: {} < {}", actual_height, max_block);
 		
 		while actual_height < max_block {
 		
