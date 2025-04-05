@@ -283,7 +283,7 @@ fn calculate_diff(coins: u64) -> u64 {
 	else
 	{
 		let result = max(1, (4.0 - (coins as f64).log(10.0).ceil()) as u64);
-		coins * (250 * result)
+		coins * (1000000 * result)
 	}
 }
 
