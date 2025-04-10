@@ -1182,7 +1182,7 @@ async fn main() -> sled::Result<()> {
 				let active_miners = count_active_miners(seconds);
 				println!("Total active miners: {}", active_miners.len());
 				for (miner, workers) in &active_miners {
-					active_workers = active_workers + workers;
+					active_workers = active_workers + workers.len();
 				}
 				println!("Total active workers: {}", active_workers);
 			}
