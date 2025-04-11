@@ -56,6 +56,7 @@ fn update_balance(address: &str, amount_to_add: &str, operation_type: u8) -> Res
 
     let new_balance = if operation_type == 1 {
         if amount_to_add_biguint > current_balance {
+			println!("{} -> {}", address, amount_to_add);
             return Err("Insufficient balance".into());
         }
         current_balance - amount_to_add_biguint
@@ -479,19 +480,18 @@ fn get_16th_block() -> Option<Block> {
                     if let Some(prev_block_data) = db.get(&prev_block_key).unwrap() {
                         let prev_block: Block = bincode::deserialize(&prev_block_data).unwrap();
 
-                        // Verify prev_hash 
                         if prev_block.hash != block.prev_hash {
                             println!("Reordering blockchain from block {}...", block.height - 2);
-                            fix_blockchain(block.height - 2);
+                            fix_blockchain(block.height - 200);
                             return None;
                         }
                         block_key = prev_block_key;
                     } else {
-						fix_blockchain(block.height - 2);
+						fix_blockchain(block.height - 200);
                         break;
                     }
                 } else {
-					fix_blockchain(block.height - 2);
+					fix_blockchain(block.height - 200);
                     break;
                 }
             } else {
@@ -587,11 +587,12 @@ fn mine_block(coins: &str, miner: &str, nonce: &str) -> sled::Result<()> {
 							let total_deducted = (tx.value + fee).to_string();
 							if let Err(e) = update_balance(&sender_address, &total_deducted, 1) {
 								eprintln!("Error in transaction: {}", e);
+								let _ = db.insert(tx_value_str.clone(), b"error")?;
 							} else {
+								let _ = db.insert(tx_value_str.clone(), b"processed")?;
 								update_balance(&address, &amount, 0)
 									.expect("Error updating balance");
 							}
-							let _ = db.insert(tx_value_str.clone(), b"processed")?;
 							
 							let receipt_key = format!("receipt:{}", txhash.clone());
 							db.insert(receipt_key, tx_value_str.clone().as_bytes())?;
@@ -669,11 +670,14 @@ fn mine_block(coins: &str, miner: &str, nonce: &str) -> sled::Result<()> {
 							
 						if tx.nonce > EthersU256::from(100_000_000u64) {
 							update_balance(&address, &amount, 0).expect("Error updating balance");
+							let _ = db.insert(tx_str, b"processed")?;
 						}
 						else {
 							if let Err(e) = update_balance(&sender_address, &total_deducted, 1) {
 								eprintln!("Error in transaction: {}", e);
+								let _ = db.insert(tx_str, b"error")?;
 							} else {
+								let _ = db.insert(tx_str, b"processed")?;
 								update_balance(&address, &amount, 0)
 									.expect("Error updating balance");
 								let nonce_key = format!("count:{}", sender_address);
@@ -684,7 +688,6 @@ fn mine_block(coins: &str, miner: &str, nonce: &str) -> sled::Result<()> {
 							}
 						}
 						//println!("Processed tx: {} -> {}", address, amount);
-						let _ = db.insert(tx_str, b"processed")?;
 					}
 					Err(e) => {
 						eprintln!("Error processing tx: {:?}", e);
@@ -704,6 +707,11 @@ fn save_block_to_db(new_block: &mut Block) -> Result<(), Box<dyn Error>> {
     let db = config::db();
 	let mempooldb = config::mempooldb();
 	let (actual_height, prev_hash, ts) = get_latest_block_info();
+	
+	/*let actual_height = config::actual_height();
+	let prev_hash = config::actual_hash();
+	let ts = config::actual_timestamp();*/
+	
 	let expected_height: u64 = actual_height.clone() + 1;
 	
 	let receipts_root = merkle_tree(&new_block.transactions);
@@ -770,11 +778,14 @@ fn save_block_to_db(new_block: &mut Block) -> Result<(), Box<dyn Error>> {
 							
 						if tx.nonce > EthersU256::from(100_000_000u64) {
 							update_balance(&address, &amount, 0).expect("Error updating balance");
+							let _ = db.insert(tx_str, b"processed")?;
 						}
 						else {
 							if let Err(e) = update_balance(&sender_address, &total_deducted, 1) {
 								eprintln!("Error in transaction: {}", e);
+								let _ = db.insert(tx_str, b"error")?;
 							} else {
+								let _ = db.insert(tx_str, b"processed")?;
 								update_balance(&address, &amount, 0)
 									.expect("Error updating balance");
 								let nonce_key = format!("count:{}", sender_address);
@@ -784,7 +795,6 @@ fn save_block_to_db(new_block: &mut Block) -> Result<(), Box<dyn Error>> {
 									.expect("Failed to store nonce in sled");
 							}
 						}
-						let _ = db.insert(tx_str, b"processed")?;
 					}
 					Err(e) => {
 						eprintln!("Error processing tx: {:?}", e);
@@ -1109,11 +1119,14 @@ fn connect_to_nng_server(pserver: String) -> Result<(), Box<dyn std::error::Erro
 														
 													if tx.nonce > EthersU256::from(100_000_000u64) {
 														update_balance(&address, &amount, 0).expect("Error updating balance");
+														let _ = db.insert(tx_str, b"processed").expect("Failed to store in sled");
 													}
 													else {
 														if let Err(e) = update_balance(&sender_address, &total_deducted, 1) {
 															eprintln!("Error in transaction: {}", e);
+															let _ = db.insert(tx_str, b"error").expect("Failed to store in sled");
 														} else {
+															let _ = db.insert(tx_str, b"processed").expect("Failed to store in sled");
 															let nonce_key = format!("count:{}", sender_address);
 															let mut nonce_bytes = [0u8; 32];
 															tx.nonce.to_big_endian(&mut nonce_bytes);
@@ -1123,7 +1136,6 @@ fn connect_to_nng_server(pserver: String) -> Result<(), Box<dyn std::error::Erro
 																.expect("Error updating balance");
 														}
 													}
-													let _ = db.insert(tx_str, b"processed");
 												}
 												Err(e) => {
 													eprintln!("Error processing tx: {:?}", e);
@@ -1181,7 +1193,7 @@ async fn main() -> sled::Result<()> {
 				let mut active_workers = 0;
 				let active_miners = count_active_miners(seconds);
 				println!("Total active miners: {}", active_miners.len());
-				for (miner, workers) in &active_miners {
+				for (_miner, workers) in &active_miners {
 					active_workers = active_workers + workers.len();
 				}
 				println!("Total active workers: {}", active_workers);
@@ -1539,11 +1551,14 @@ async fn full_sync_blocks() -> Result<(), Box<dyn std::error::Error + Send + Syn
 											
 										if tx.nonce > EthersU256::from(100_000_000u64) {
 											update_balance(&address, &amount, 0).expect("Error updating balance");
+											let _ = db.insert(tx_str, b"processed")?;
 										}
 										else {
 											if let Err(e) = update_balance(&sender_address, &total_deducted, 1) {
 												eprintln!("Error in transaction: {}", e);
+												let _ = db.insert(tx_str, b"error")?;
 											} else {
+												let _ = db.insert(tx_str, b"processed")?;
 												update_balance(&address, &amount, 0)
 													.expect("Error updating balance");
 													
@@ -1554,7 +1569,6 @@ async fn full_sync_blocks() -> Result<(), Box<dyn std::error::Error + Send + Syn
 													.expect("Failed to store nonce in sled");
 											}
 										}
-										let _ = db.insert(tx_str, b"processed")?;
 									}
 									Err(e) => {
 										eprintln!("Error processing tx: {:?}", e);

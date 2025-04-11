@@ -3,7 +3,7 @@ use ethers::types::Address;
 use serde::Deserialize;
 use std::fs;
 use std::str::FromStr;
-use std::sync::{OnceLock, atomic::{AtomicUsize, Ordering}};
+use std::sync::{Mutex, OnceLock, atomic::{AtomicUsize, Ordering}};
 use sled;
 
 static PKEY: OnceLock<String> = OnceLock::new();
@@ -11,7 +11,10 @@ static ETH_ADDRESS: OnceLock<Address> = OnceLock::new();
 static DB: OnceLock<sled::Db> = OnceLock::new();
 static MEMPOOLDB: OnceLock<sled::Db> = OnceLock::new();
 static POOLDB: OnceLock<sled::Db> = OnceLock::new();
-static SYNC_STATUS: OnceLock<AtomicUsize> = OnceLock::new(); // Nueva variable
+static SYNC_STATUS: OnceLock<AtomicUsize> = OnceLock::new();
+static ACTUAL_HEIGHT: OnceLock<AtomicUsize> = OnceLock::new();
+static ACTUAL_HASH: OnceLock<Mutex<String>> = OnceLock::new();
+static ACTUAL_TIMESTAMP: OnceLock<AtomicUsize> = OnceLock::new();
 
 #[derive(Deserialize)]
 struct KeyFile {
@@ -39,6 +42,10 @@ pub fn load_key() {
     POOLDB.set(pooldb).expect("Mempool was already initialized");
 
     SYNC_STATUS.set(AtomicUsize::new(0)).expect("Sync status already initialized");
+	
+	ACTUAL_HEIGHT.set(AtomicUsize::new(0)).expect("Actual height already initialized");
+	ACTUAL_HASH.set(Mutex::new("0000000000000000000000000000000000000000000000000000000000000000".to_string())).expect("Actual hash key was started");
+	ACTUAL_TIMESTAMP.set(AtomicUsize::new(0)).expect("Actual timestamp already initialized");
 }
 
 pub fn pkey() -> &'static str {
@@ -70,5 +77,47 @@ pub fn update_sync(value: usize) {
         status.store(value, Ordering::SeqCst);
     } else {
         panic!("Sync status not initialized");
+    }
+}
+
+pub fn actual_height() -> usize {
+    ACTUAL_HEIGHT.get().expect("Actual height not initialized").load(Ordering::SeqCst)
+}
+
+pub fn update_actual_height(value: usize) {
+    if let Some(status) = ACTUAL_HEIGHT.get() {
+        status.store(value, Ordering::SeqCst);
+    } else {
+        panic!("Actual height not initialized");
+    }
+}
+
+pub fn update_actual_hash(value: String) {
+    if let Some(hash_mutex) = ACTUAL_HASH.get() {
+        let mut hash = hash_mutex.lock().expect("Failed to lock hash mutex");
+        *hash = value;
+    } else {
+        panic!("Actual hash not initialized");
+    }
+}
+
+pub fn actual_hash() -> String {
+    ACTUAL_HASH
+        .get()
+        .expect("Actual hash not loaded")
+        .lock()
+        .expect("Failed to lock hash mutex")
+        .clone()
+}
+
+pub fn actual_timestamp() -> usize {
+    ACTUAL_TIMESTAMP.get().expect("Actual timestamp not initialized").load(Ordering::SeqCst)
+}
+
+pub fn update_actual_timestamp(value: usize) {
+    if let Some(status) = ACTUAL_TIMESTAMP.get() {
+        status.store(value, Ordering::SeqCst);
+    } else {
+        panic!("Actual timestamp not initialized");
     }
 }
