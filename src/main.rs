@@ -511,14 +511,16 @@ fn get_block_tx_hashes(blockhash: &str) -> Option<String> {
 }
 
 fn get_receipt_info(txhash: &str) -> Option<(String, u64)> {
-    let db = config::db();
+    /*let db = config::db();
     let receipt_key = format!("receipt:{}", txhash);
     let receiptblock_key = format!("receiptblock:{}", txhash);
     let receipt = db.get(receipt_key).ok().flatten()?;
     let block_bytes = db.get(receiptblock_key).ok().flatten()?;
     let receipt_str = String::from_utf8(receipt.to_vec()).ok()?;
-    let txheight = u64::from_be_bytes(block_bytes.as_ref().try_into().ok()?);
-    Some((receipt_str, txheight))
+    let txheight = u64::from_be_bytes(block_bytes.as_ref().try_into().ok()?);*/
+	let (actual_height, actual_hash, _) = get_latest_block_info();
+    //Some((receipt_str, txheight))
+	Some((actual_hash, actual_height - 1))
 }
 
 
@@ -749,15 +751,20 @@ fn save_block_to_db(new_block: &mut Block) -> Result<(), Box<dyn Error>> {
 	let serialized_block = bincode::serialize(&new_block).unwrap();
 	let unsigned_serialized_block = serde_json::to_string_pretty(&new_block).unwrap();*/
 	
-	
-	
-	
-	//println!("{} vs {} || {} vs {}", expected_height, new_block.height, prev_hash, new_block.prev_hash);
 	if expected_height == new_block.height && prev_hash == new_block.prev_hash && new_block.timestamp >= ts {
 		let serialized_block = bincode::serialize(new_block)?;
 		let _ = db.insert(format!("block:{:08}", new_block.height), serialized_block)?;
 		let _ = db.insert(format!("hash:{}", new_block.hash), &new_block.height.to_be_bytes())?;
 		let _ = db.insert("chain:latest_block", &new_block.height.to_be_bytes())?;
+		
+		let block_transactions: Vec<&str> = new_block.transactions.split('-').collect();
+
+		for tx_str in block_transactions {
+			if let Err(e) = mempooldb.remove(&tx_str) {
+				eprintln!("Error deleting mempool entry: {:?}", e);
+			}
+		}
+		
 		println!("Block {} successfully saved in DB", new_block.height);
 		if let Some(block) = get_16th_block() {
 			let transactions: Vec<&str> = block.transactions.split('-').collect();
@@ -772,6 +779,7 @@ fn save_block_to_db(new_block: &mut Block) -> Result<(), Box<dyn Error>> {
 					Ok(tx) => {
 						let address = tx.to.map(|addr| format!("{:?}", addr)).unwrap_or("None".to_string());
 						let sender_address = format!("0x{}", hex::encode(tx.from));
+						let txhash = format!("0x{}", ethers::utils::hex::encode(tx.hash.to_string()));
 						let amount = tx.value.clone().to_string();
 						let fee = tx.gas * tx.gas_price.unwrap_or(EthersU256::zero());
 						let total_deducted = (tx.value + fee).to_string();
@@ -794,6 +802,14 @@ fn save_block_to_db(new_block: &mut Block) -> Result<(), Box<dyn Error>> {
 								let _ = db.insert(nonce_key.clone(), IVec::from(&nonce_bytes[..]))
 									.expect("Failed to store nonce in sled");
 							}
+							
+							let receipt_key = format!("receipt:{}", txhash.clone());
+							db.insert(receipt_key, tx_str.clone().as_bytes())?;
+							
+							let (ah, _, _) = get_latest_block_info();
+							let txheight = ah + 1;
+							let receipt_key = format!("receiptblock:{}", txhash.clone());
+							db.insert(receipt_key, &txheight.to_be_bytes())?;							
 						}
 					}
 					Err(e) => {
@@ -827,6 +843,7 @@ fn get_block_as_json(block_number: u64) -> Value {
 fn start_nng_server() {
 	thread::spawn(move || {
 		let db = config::db();
+		let mempooldb = config::mempooldb();
 		let client = reqwest::blocking::Client::new();
 		let socket = Socket::new(Protocol::Pub0).expect("Can't launch NNG socket");
 		socket.listen("tcp://0.0.0.0:5555").expect("Error opening NNG port (5555)");
@@ -890,6 +907,37 @@ fn start_nng_server() {
 					}
 					//PUT BLOCK----------------------------------------------------------------------------------------
 					s_height = actual_height.clone();
+					for entry in mempooldb.iter() {
+						match entry {
+							Ok((key, value)) => {
+								let tx_value_str = String::from_utf8(value.to_vec()).unwrap_or_else(|_| String::from("Invalid UTF-8"));
+								
+								let payload = json!({
+									"jsonrpc": "2.0",
+									"method": "eth_sendRawTransaction",
+									"params": [tx_value_str.clone()],
+									"id": "mempool_auto"
+								});
+								
+								match client.post("http://62.113.200.176:30303/rpc")
+									.json(&payload)
+									.send()
+								{
+									Ok(response) => {
+										match response.text() {
+											Ok(text) => { println!("RESPONSE: {:?}", text); }
+											Err(e) => { println!("ERROR RESPONSE: {:?}", e); }
+										}
+									}
+									Err(_e) => {}
+								}
+								println!("rawtx Value: {:?}", tx_value_str);
+							}
+							Err(e) => {
+								eprintln!("Error reading mempool entry: {:?}", e);
+							}
+						}
+					}
 				}
 			}
 			thread::sleep(Duration::from_millis(25));
@@ -1179,13 +1227,26 @@ async fn main() -> sled::Result<()> {
 	println!("Starting NNG server...");
 	start_nng_server();
 	
+	println!("");
+	println!("Available commands:");
+	println!("  help     - Show this help message");
+	println!("  version  - Show server version");
+	println!("  miners   - Show active miners in the last 600 seconds");
+	println!("");
+	
 	// i/o thread
 	thread::spawn(move || {
 		loop {
 			let mut input = String::new();
 			io::stdin().read_line(&mut input).unwrap();
-			if input.trim() == "v" {
-				println!("Pokio server 0.1.1");
+			if input.trim() == "version" {
+				println!("Pokio server 0.1.3");
+			}
+			if input.trim() == "help" {
+				println!("Available commands:");
+				println!("  help     - Show this help message");
+				println!("  version  - Show server version");
+				println!("  miners   - Show active miners in the last 600 seconds");
 			}
 			if input.trim() == "miners" {
 				println!("Miners in last 600 seconds");
@@ -1255,6 +1316,7 @@ async fn main() -> sled::Result<()> {
 					if let Some(params) = data["params"].as_array() {
 						if let Some(raw_tx) = params.get(0) {
 							if let Some(raw_tx_str) = raw_tx.as_str() {
+								println!("Get rawtx: {}", raw_tx_str);
 								txhash = store_raw_transaction(raw_tx_str.to_string());
 							}
 						}
@@ -1357,8 +1419,10 @@ async fn main() -> sled::Result<()> {
 						.get(0)
 						.and_then(|v| v.as_str())
 						.unwrap_or("");
+					println!("Ask receipt: {}", txhash);
 					if let Some((_receipt, block)) = get_receipt_info(txhash) {
 						let block_json = get_block_as_json(block);
+						println!("Block sent: {}", block_json);
 						let hexblock = format!("0x{:x}", block);						
 						json!({"jsonrpc": "2.0", "id": id, "result": { "blockHash" : block_json.get("hash"), "blockNumber" : hexblock,
 							"contractAddress" : null, "cumulativeGasUsed" : "0x0", "effectiveGasPrice" : "0x0", "from" : "", "gasUsed" : "0x0",
@@ -1546,6 +1610,7 @@ async fn full_sync_blocks() -> Result<(), Box<dyn std::error::Error + Send + Syn
 										let address = tx.to.map(|addr| format!("{:?}", addr)).unwrap_or("None".to_string());
 										let sender_address = format!("0x{}", hex::encode(tx.from));
 										let amount = tx.value.clone().to_string();
+										let txhash = format!("0x{}", ethers::utils::hex::encode(tx.hash.to_string()));
 										let fee = tx.gas * tx.gas_price.unwrap_or(EthersU256::zero());
 										let total_deducted = (tx.value + fee).to_string();
 											
@@ -1568,6 +1633,13 @@ async fn full_sync_blocks() -> Result<(), Box<dyn std::error::Error + Send + Syn
 												let _ = db.insert(nonce_key.clone(), IVec::from(&nonce_bytes[..]))
 													.expect("Failed to store nonce in sled");
 											}
+											let receipt_key = format!("receipt:{}", txhash.clone());
+											db.insert(receipt_key, tx_str.clone().as_bytes())?;
+											
+											let (ah, _, _) = get_latest_block_info();
+											let txheight = ah + 1;
+											let receipt_key = format!("receiptblock:{}", txhash.clone());
+											db.insert(receipt_key, &txheight.to_be_bytes())?;
 										}
 									}
 									Err(e) => {
