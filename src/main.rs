@@ -1012,7 +1012,7 @@ fn start_nng_server(ips: Vec<String>) {
 						}
 					}
 				}
-				tokio::time::sleep(Duration::from_millis(10)).await;
+				tokio::time::sleep(Duration::from_millis(25)).await;
 			}
 		});
 	});
@@ -1284,7 +1284,7 @@ fn connect_to_nng_server(pserver: String) -> Result<(), Box<dyn std::error::Erro
 						}
 					}
 				}
-				thread::sleep(Duration::from_millis(10));
+				thread::sleep(Duration::from_millis(25));
 				
 			}
 		});
