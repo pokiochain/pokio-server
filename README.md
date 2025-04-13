@@ -2,7 +2,7 @@
 
 # Build on Ubuntu
 
-This guide walks you through how to install Rust and compile a Pokio Miner on Ubuntu.
+This guide walks you through how to install Rust and compile a Pokio Server on Ubuntu.
 
 ---
 
