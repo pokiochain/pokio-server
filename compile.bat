@@ -3,7 +3,6 @@ echo [*] Setting RUSTFLAGS...
 
 set RUSTFLAGS=-C target-cpu=native -C opt-level=3 -C codegen-units=1 -C panic=abort -C target-feature=+crt-static
 
-
 echo [*] Building with cargo release profile...
 cargo build --release
 
