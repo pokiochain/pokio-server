@@ -1475,24 +1475,6 @@ async fn main() -> sled::Result<()> {
 						json!({"jsonrpc": "2.0", "id": id, "result": "pending"})
 					}
 				},
-				"eth_getTransactionReceipt" => {
-					let txhash = data["params"]
-						.get(0)
-						.and_then(|v| v.as_str())
-						.unwrap_or("");
-					//println!("Ask receipt: {}", txhash);
-					if let Some((_receipt, block)) = get_receipt_info(txhash) {
-						let block_json = get_block_as_json(block);
-						//println!("Block sent: {}", block_json);
-						let hexblock = format!("0x{:x}", block);						
-						json!({"jsonrpc": "2.0", "id": id, "result": { "blockHash" : block_json.get("hash"), "blockNumber" : hexblock,
-							"contractAddress" : null, "cumulativeGasUsed" : "0x0", "effectiveGasPrice" : "0x0", "from" : "", "gasUsed" : "0x0",
-							" logs" : [ { "removed" : false } ], "logsBloom" :"0x0", "status" : "0x1", "to" : "", "transactionHash" : txhash, "transactionIndex" : "0x0", 
-							"type" : "0x2" } })
-					} else {
-						json!({"jsonrpc": "2.0", "id": id, "result": ""})
-					}
-				},
 				"eth_getBlockByHash" => {
 					let blockhash = data["params"]
 						.get(0)
