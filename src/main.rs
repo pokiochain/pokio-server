@@ -527,6 +527,13 @@ fn get_receipt_info(txhash: &str) -> Option<(String, u64)> {
 	Some((actual_hash, actual_height - 1))
 }
 
+fn get_rawtx_status(rawtx: &str) -> Option<String> {
+	let db = config::db();
+	let rawtx_key = format!("{}", rawtx);
+	let txs = db.get(rawtx_key).ok().flatten()?;
+	let txs_str = String::from_utf8(txs.to_vec()).ok()?;
+	Some(txs_str)
+}
 
 fn mine_block(coins: &str, miner: &str, nonce: &str) -> sled::Result<()> {	
 	let result = (|| {
@@ -1438,6 +1445,35 @@ async fn main() -> sled::Result<()> {
 					let balance_biguint = BigUint::from_str(&balance).unwrap_or_else(|_| BigUint::zero());
 					let hex_balance = format!("0x{}", balance_biguint.to_str_radix(16));
 					json!({"jsonrpc": "2.0", "id": id, "result": hex_balance})
+				},
+				"eth_getTransactionReceipt" => {
+					let txhash = data["params"]
+						.get(0)
+						.and_then(|v| v.as_str())
+						.unwrap_or("");
+					//println!("Ask receipt: {}", txhash);
+					if let Some((_receipt, block)) = get_receipt_info(txhash) {
+						let block_json = get_block_as_json(block);
+						//println!("Block sent: {}", block_json);
+						let hexblock = format!("0x{:x}", block);						
+						json!({"jsonrpc": "2.0", "id": id, "result": { "blockHash" : block_json.get("hash"), "blockNumber" : hexblock,
+							"contractAddress" : null, "cumulativeGasUsed" : "0x0", "effectiveGasPrice" : "0x0", "from" : "", "gasUsed" : "0x0",
+							" logs" : [ { "removed" : false } ], "logsBloom" :"0x0", "status" : "0x1", "to" : "", "transactionHash" : txhash, "transactionIndex" : "0x0", 
+							"type" : "0x2" } })
+					} else {
+						json!({"jsonrpc": "2.0", "id": id, "result": ""})
+					}
+				},
+				"eth_getRawTransactionStatus" => {
+					let txhash = data["params"]
+						.get(0)
+						.and_then(|v| v.as_str())
+						.unwrap_or("");
+					if let Some(status) = get_rawtx_status(txhash) {						
+						json!({"jsonrpc": "2.0", "id": id, "result": status })
+					} else {
+						json!({"jsonrpc": "2.0", "id": id, "result": "pending"})
+					}
 				},
 				"eth_getTransactionReceipt" => {
 					let txhash = data["params"]
