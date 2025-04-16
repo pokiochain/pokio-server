@@ -36,38 +36,39 @@ use nng::options::protocol::pubsub::Subscribe;
 use nng::options::Options;
 use std::error::Error;
 use std::collections::HashMap;
+use std::env;
 
 mod config;
 
 fn update_balance(address: &str, amount_to_add: &str, operation_type: u8) -> Result<(), Box<dyn std::error::Error>> {
-    let db = config::db();
-    let address_lowercase = address.to_lowercase();
-    let address_key = address_lowercase.as_bytes();
+	let db = config::db();
+	let address_lowercase = address.to_lowercase();
+	let address_key = address_lowercase.as_bytes();
 
-    let amount_to_add_biguint = BigUint::parse_bytes(amount_to_add.as_bytes(), 10)
-        .ok_or("Error converting to BigUint")?;
+	let amount_to_add_biguint = BigUint::parse_bytes(amount_to_add.as_bytes(), 10)
+		.ok_or("Error converting to BigUint")?;
 
-    let current_balance = if let Some(existing_balance) = db.get(address_key)? {
-        let existing_balance_str = String::from_utf8_lossy(&existing_balance);
-        BigUint::parse_bytes(existing_balance_str.as_bytes(), 10)
-            .ok_or("Error converting to BigUint")?
-    } else {
-        BigUint::zero()
-    };
+	let current_balance = if let Some(existing_balance) = db.get(address_key)? {
+		let existing_balance_str = String::from_utf8_lossy(&existing_balance);
+		BigUint::parse_bytes(existing_balance_str.as_bytes(), 10)
+			.ok_or("Error converting to BigUint")?
+	} else {
+		BigUint::zero()
+	};
 
-    let new_balance = if operation_type == 1 {
-        if amount_to_add_biguint > current_balance {
-			println!("{} -> {}", address, amount_to_add);
-            return Err("Insufficient balance".into());
-        }
-        current_balance - amount_to_add_biguint
-    } else {
-        current_balance + amount_to_add_biguint
-    };
+	let new_balance = if operation_type == 1 {
+		if amount_to_add_biguint > current_balance {
+			//println!("{} -> {}", address, amount_to_add);
+			return Err("Insufficient balance".into());
+		}
+		current_balance - amount_to_add_biguint
+	} else {
+		current_balance + amount_to_add_biguint
+	};
 
-    let _ = db.insert(address_key, new_balance.to_string().as_bytes())?;
+	let _ = db.insert(address_key, new_balance.to_string().as_bytes())?;
 
-    Ok(())
+	Ok(())
 }
 
 
@@ -147,53 +148,53 @@ fn calculate_message_hash(
 
 #[inline(always)]
 fn hash_func(args: &[&[u8]]) -> Vec<u8> {
-    let mut hasher = Sha256::new();
-    for arg in args {
-        hasher.update(arg);
-    }
-    hasher.finalize().to_vec()
+	let mut hasher = Sha256::new();
+	for arg in args {
+		hasher.update(arg);
+	}
+	hasher.finalize().to_vec()
 }
 
 fn expand(buf: &mut Vec<Vec<u8>>, space_cost: usize) {
-    buf.reserve(space_cost - 1);
-    for s in 1..space_cost {
-        let new_hash = hash_func(&[&buf[s - 1]]);
-        buf.push(new_hash);
-    }
+	buf.reserve(space_cost - 1);
+	for s in 1..space_cost {
+		let new_hash = hash_func(&[&buf[s - 1]]);
+		buf.push(new_hash);
+	}
 }
 
 fn mix(buf: &mut Vec<Vec<u8>>, delta: usize, salt: &[u8], space_cost: usize, time_cost: usize) {
-    for _ in 0..time_cost {
-        for s in 0..space_cost {
-            let prev = &buf[s.saturating_sub(1)];
-            buf[s] = hash_func(&[prev, &buf[s]]);
-            
-            for i in 0..delta {
-                let idx_block = hash_func(&[salt, &i.to_le_bytes()]);
-                let other = usize::from_le_bytes(idx_block[..8].try_into().unwrap()) % space_cost;
-                buf[s] = hash_func(&[&buf[s], &buf[other]]);
-            }
-        }
-    }
+	for _ in 0..time_cost {
+		for s in 0..space_cost {
+			let prev = &buf[s.saturating_sub(1)];
+			buf[s] = hash_func(&[prev, &buf[s]]);
+			
+			for i in 0..delta {
+				let idx_block = hash_func(&[salt, &i.to_le_bytes()]);
+				let other = usize::from_le_bytes(idx_block[..8].try_into().unwrap()) % space_cost;
+				buf[s] = hash_func(&[&buf[s], &buf[other]]);
+			}
+		}
+	}
 }
 
 fn extract(buf: &[Vec<u8>]) -> Vec<u8> {
-    buf.last().unwrap().to_vec()
+	buf.last().unwrap().to_vec()
 }
 
 pub fn pokiohash(password: &str, salt: &str, space_cost: usize, time_cost: usize, delta: usize) -> Vec<u8> {
-    let salt_bytes = salt.as_bytes();
-    let mut buf = Vec::with_capacity(space_cost);
-    buf.push(hash_func(&[password.as_bytes(), salt_bytes]));
-    
-    expand(&mut buf, space_cost);
-    mix(&mut buf, delta, salt_bytes, space_cost, time_cost);
-    extract(&buf)
+	let salt_bytes = salt.as_bytes();
+	let mut buf = Vec::with_capacity(space_cost);
+	buf.push(hash_func(&[password.as_bytes(), salt_bytes]));
+	
+	expand(&mut buf, space_cost);
+	mix(&mut buf, delta, salt_bytes, space_cost, time_cost);
+	extract(&buf)
 }
 
 pub fn pokiohash_hash(password: &str, salt: &str) -> String {
-    let hash_bytes = pokiohash(password, salt, 16, 20, 4);
-    hex::encode(hash_bytes)
+	let hash_bytes = pokiohash(password, salt, 16, 20, 4);
+	hex::encode(hash_bytes)
 }
 
 #[inline(always)]
@@ -281,7 +282,7 @@ fn calculate_diff(coins: u64, actual_height: u64) -> u64 {
 	if actual_height <= 16 {
 		coins
 	}
-	else if actual_height > 65002 { //fix
+	else if actual_height >= 65002 { //fix
 		coins * (5000000 - ( coins * 100) )
 	}
 	else
@@ -319,7 +320,7 @@ fn get_mining_template(coins: &str, miner: &str) -> String {
 	
 	let nonce = 100000000 + height + 1;
 	
-	let fee: u64 = 3;
+	let fee: u64 = config::mining_fee().try_into().unwrap();;
 	let _fee_biguint = BigUint::from(fee);
 	let fee_base_wei = BigUint::parse_bytes(b"10000000000000000", 10).unwrap();
 	let fee_coins_biguint = BigUint::from(coins_dec);
@@ -334,6 +335,8 @@ fn get_mining_template(coins: &str, miner: &str) -> String {
 	let wei_amount = (coins_biguint * &base_wei) - fee_wei_amount;
 	let reward_amount = EthersU256::from_dec_str(&wei_amount.to_str_radix(10)).unwrap();
 	let raw_tx: String;
+	
+	//println!("{} -- {}", reward_amount, fee_reward_amount);
 
 	match generate_reward_tx(config::pkey(), nonce, miner, reward_amount) {
 		Ok(tx) => {
@@ -457,81 +460,75 @@ fn fix_blockchain(last_valid_height: u64) -> Option<Block> {
 }
 
 fn get_16th_block() -> Option<Block> {
-    let db = config::db();
-    if let Some(latest) = db.get("chain:latest_block").unwrap() {
-        let latest_height = u64::from_be_bytes(latest.as_ref().try_into().unwrap());
-        let mut block_key = format!("block:{:08}", latest_height);
+	let db = config::db();
+	if let Some(latest) = db.get("chain:latest_block").unwrap() {
+		let latest_height = u64::from_be_bytes(latest.as_ref().try_into().unwrap());
+		let mut block_key = format!("block:{:08}", latest_height);
 
-        for i in 0..16 {
-            if let Some(block_data) = db.get(&block_key).unwrap() {
-                let block: Block = bincode::deserialize(&block_data).unwrap();
+		for i in 0..16 {
+			if let Some(block_data) = db.get(&block_key).unwrap() {
+				let block: Block = bincode::deserialize(&block_data).unwrap();
 
-                if i == 15 {
-                    return Some(block);
-                }
+				if i == 15 {
+					return Some(block);
+				}
 
-                if block.prev_hash.is_empty() {
-                    break;
-                }
+				if block.prev_hash.is_empty() {
+					break;
+				}
 
-                if let Some(prev_height) = db.get(format!("hash:{}", block.prev_hash)).unwrap() {
-                    let prev_height = u64::from_be_bytes(prev_height.as_ref().try_into().unwrap());
-                    let prev_block_key = format!("block:{:08}", prev_height);
+				if let Some(prev_height) = db.get(format!("hash:{}", block.prev_hash)).unwrap() {
+					let prev_height = u64::from_be_bytes(prev_height.as_ref().try_into().unwrap());
+					let prev_block_key = format!("block:{:08}", prev_height);
 
-                    if let Some(prev_block_data) = db.get(&prev_block_key).unwrap() {
-                        let prev_block: Block = bincode::deserialize(&prev_block_data).unwrap();
+					if let Some(prev_block_data) = db.get(&prev_block_key).unwrap() {
+						let prev_block: Block = bincode::deserialize(&prev_block_data).unwrap();
 
-                        if prev_block.hash != block.prev_hash {
-                            println!("Reordering blockchain from block {}...", block.height - 2);
-                            fix_blockchain(block.height - 200);
-                            return None;
-                        }
-                        block_key = prev_block_key;
-                    } else {
+						if prev_block.hash != block.prev_hash {
+							println!("Reordering blockchain from block {}...", block.height - 2);
+							fix_blockchain(block.height - 200);
+							return None;
+						}
+						block_key = prev_block_key;
+					} else {
 						fix_blockchain(block.height - 200);
-                        break;
-                    }
-                } else {
+						break;
+					}
+				} else {
 					fix_blockchain(block.height - 200);
-                    break;
-                }
-            } else {
-                break;
-            }
-        }
-    }
-    None
+					break;
+				}
+			} else {
+				break;
+			}
+		}
+	}
+	None
 }
 
 fn get_block_tx_hashes(blockhash: &str) -> Option<String> {
-    let db = config::db();
-    let blockhash_key = format!("txblock:{}", blockhash);
-    let txs = db.get(blockhash_key).ok().flatten()?;
-    let txs_str = String::from_utf8(txs.to_vec()).ok()?;
-    Some(txs_str)
+	let db = config::db();
+	let blockhash_key = format!("txblock:{}", blockhash);
+	let txs = db.get(blockhash_key).ok().flatten()?;
+	let txs_str = String::from_utf8(txs.to_vec()).ok()?;
+	Some(txs_str)
 }
 
 fn get_receipt_info(txhash: &str) -> Option<(String, u64)> {
-    /*let db = config::db();
-    let receipt_key = format!("receipt:{}", txhash);
-    let receiptblock_key = format!("receiptblock:{}", txhash);
-    let receipt = db.get(receipt_key).ok().flatten()?;
-    let block_bytes = db.get(receiptblock_key).ok().flatten()?;
-    let receipt_str = String::from_utf8(receipt.to_vec()).ok()?;
-    let txheight = u64::from_be_bytes(block_bytes.as_ref().try_into().ok()?);*/
+	/*let db = config::db();
+	let receipt_key = format!("receipt:{}", txhash);
+	let receiptblock_key = format!("receiptblock:{}", txhash);
+	let receipt = db.get(receipt_key).ok().flatten()?;
+	let block_bytes = db.get(receiptblock_key).ok().flatten()?;
+	let receipt_str = String::from_utf8(receipt.to_vec()).ok()?;
+	let txheight = u64::from_be_bytes(block_bytes.as_ref().try_into().ok()?);*/
 	let (actual_height, actual_hash, _) = get_latest_block_info();
-    //Some((receipt_str, txheight))
+	//Some((receipt_str, txheight))
 	Some((actual_hash, actual_height - 1))
 }
 
 
-fn mine_block(coins: &str, miner: &str, nonce: &str) -> sled::Result<()> {
-	
-	while config::sync_status() == 1 {
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    config::update_sync(1);
-	
+fn mine_block(coins: &str, miner: &str, nonce: &str) -> sled::Result<()> {	
 	let result = (|| {
 		let mining_template = get_mining_template(&coins, &miner);
 		let mut modified_password = nonce.to_string();
@@ -592,11 +589,11 @@ fn mine_block(coins: &str, miner: &str, nonce: &str) -> sled::Result<()> {
 								let address = tx.to.map(|addr| format!("{:?}", addr)).unwrap_or("None".to_string());
 								let sender_address = format!("0x{}", hex::encode(tx.from));
 								let amount = tx.value.clone().to_string();
-								let txhash = format!("0x{}", ethers::utils::hex::encode(tx.hash.to_string()));
+								let txhash = keccak256(&tx_str); //format!("0x{}", ethers::utils::hex::encode(tx.hash.to_string()));
 								let fee = tx.gas * tx.gas_price.unwrap_or(EthersU256::zero());
 								let total_deducted = (tx.value + fee).to_string();
 								if let Err(e) = update_balance(&sender_address, &total_deducted, 1) {
-									eprintln!("Error in transaction: {}", e);
+									//eprintln!("Error in transaction: {}", e);
 									let _ = db.insert(tx_value_str.clone(), b"error")?;
 								} else {
 									let _ = db.insert(tx_value_str.clone(), b"processed")?;
@@ -624,9 +621,9 @@ fn mine_block(coins: &str, miner: &str, nonce: &str) -> sled::Result<()> {
 						}
 						
 						transactions_list = format!("{}-{}", transactions_list, tx_value_str);
-						if let Err(e) = mempooldb.remove(&key) {
+						/*if let Err(e) = mempooldb.remove(&key) {
 							eprintln!("Error deleting mempool entry: {:?}", e);
-						}
+						}*/
 					}
 					Err(e) => {
 						eprintln!("Error reading mempool entry: {:?}", e);
@@ -648,79 +645,20 @@ fn mine_block(coins: &str, miner: &str, nonce: &str) -> sled::Result<()> {
 			
 			new_block.hash = block_hash;
 			
-			//sign block
-			let unsigned_serialized_block = serde_json::to_string_pretty(&new_block).unwrap();
-			let block_signature = keccak256(&unsigned_serialized_block);
-			new_block.signature = block_signature;
-			//serialize block to save in sled
-			let serialized_block = bincode::serialize(&new_block).unwrap();
-			//let sync_height = new_block.height;
-			//height as key
-			let _ = db.insert(format!("block:{:08}", new_block.height), serialized_block)?;
-			//index hash -> height
-			let _ = db.insert(format!("hash:{}", new_block.hash), &new_block.height.to_be_bytes())?;
-			//save lastest_block
-			let _ = db.insert("chain:latest_block", &new_block.height.to_be_bytes())?;
-			
-			if let Some(block) = get_16th_block() {
-				let transactions: Vec<&str> = block.transactions.split('-').collect();
-
-				for tx_str in transactions {
-					if db.contains_key(tx_str)? {
-						continue;
-					}
-					let dtx = decode_transaction(tx_str);
-					match dtx {
-						Ok(tx) => {
-							let address = tx.to.map(|addr| format!("{:?}", addr)).unwrap_or("None".to_string());
-							let sender_address = format!("0x{}", hex::encode(tx.from));
-							let amount = tx.value.clone().to_string();
-							let fee = tx.gas * tx.gas_price.unwrap_or(EthersU256::zero());
-							let total_deducted = (tx.value + fee).to_string();
-								
-							if tx.nonce > EthersU256::from(100_000_000u64) {
-								update_balance(&address, &amount, 0).expect("Error updating balance");
-								let _ = db.insert(tx_str, b"processed")?;
-							}
-							else {
-								if let Err(e) = update_balance(&sender_address, &total_deducted, 1) {
-									eprintln!("Error in transaction: {}", e);
-									let _ = db.insert(tx_str, b"error")?;
-								} else {
-									let _ = db.insert(tx_str, b"processed")?;
-									update_balance(&address, &amount, 0)
-										.expect("Error updating balance");
-									let nonce_key = format!("count:{}", sender_address);
-									let mut nonce_bytes = [0u8; 32];
-									tx.nonce.to_big_endian(&mut nonce_bytes);
-									let _ = db.insert(nonce_key.clone(), IVec::from(&nonce_bytes[..]))
-										.expect("Failed to store nonce in sled");
-								}
-							}
-							//println!("Processed tx: {} -> {}", address, amount);
-						}
-						Err(e) => {
-							eprintln!("Error processing tx: {:?}", e);
-						}
-					}
-					if let Err(e) = mempooldb.remove(&tx_str) {
-						eprintln!("Error deleting mempool entry: {:?}", e);
-					}
-				}
+			if let Err(e) = save_block_to_db(&mut new_block) {
+				eprintln!("Error saving block: {}", e);
 			}
 		}
-
 		Ok(())
 	})();
-    config::update_sync(0);
-    result
+	result
 }
 
 fn save_block_to_db(new_block: &mut Block) -> Result<(), Box<dyn Error>> {
 	
 	while config::sync_status() == 1 {
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
+		std::thread::sleep(std::time::Duration::from_millis(10));
+	}
 	config::update_sync(1);
 	
 	let result = (|| {
@@ -734,53 +672,65 @@ fn save_block_to_db(new_block: &mut Block) -> Result<(), Box<dyn Error>> {
 		
 		let expected_height: u64 = actual_height.clone() + 1;
 		
-		let receipts_root = merkle_tree(&new_block.transactions);
-		if receipts_root == new_block.receipts_root {
-			println!("Check merkle passed for block {}", new_block.height);
-		}  else { return Ok(()) }
-		
-		let c_difficulty = calculate_diff(new_block.block_reward, actual_height);
-		if c_difficulty != new_block.difficulty {
-			return Err(format!(
-				"Difficulty mismatch at block {}: expected {}, got {}",
-				new_block.height, c_difficulty, new_block.difficulty
-			).into());
-		}
-		
-		let hash = new_block.hash.clone();
-		new_block.signature = "".to_string();
-		new_block.hash = "".to_string();
-		let unhashed_serialized_block = serde_json::to_string_pretty(&new_block).unwrap();
-		let block_hash = keccak256(&unhashed_serialized_block);
-		
-		if hash != block_hash {
-			return Err(format!(
-				"Hash mismatch for block {}: expected {}, got {}",
-				new_block.height, block_hash, hash
-			).into());
-		}
-		new_block.hash = block_hash;
-		
-		let diff_hex = format!("{:016X}", new_block.difficulty);
-		let mining_template = format!("{}-{}-{}-{}-{}-{}-{}", new_block.nonce, new_block.block_reward, 
-			diff_hex, new_block.height, new_block.prev_hash, new_block.miner, new_block.transactions).to_lowercase();
-		let mining_hash = pokiohash_hash(&mining_template, &new_block.nonce);
-		let mining_difficulty = hash_to_difficulty(&mining_hash) as U256;
-		
-		if mining_difficulty < c_difficulty.into() {
-			return Err(format!(
-				"Difficulty mismatch for block {}: expected {}, got {}",
-				new_block.height, c_difficulty, mining_difficulty
-			).into());
-		}
-		
-		/*let unsigned_serialized_block = serde_json::to_string_pretty(&new_block).unwrap();
-		let block_signature = keccak256(&unsigned_serialized_block);
-		new_block.signature = block_signature;
-		let serialized_block = bincode::serialize(&new_block).unwrap();
-		let unsigned_serialized_block = serde_json::to_string_pretty(&new_block).unwrap();*/
-		
-		if expected_height == new_block.height && prev_hash == new_block.prev_hash && new_block.timestamp >= ts {
+		if expected_height == new_block.height && prev_hash == new_block.prev_hash {//&& new_block.timestamp >= ts {
+			let receipts_root = merkle_tree(&new_block.transactions);
+			if receipts_root != new_block.receipts_root {
+				return Err(format!(
+					"Merkle check mismatch at block {}: expected {}, got {}",
+					new_block.height, receipts_root, new_block.receipts_root
+				).into());
+			}
+			
+			let c_difficulty = calculate_diff(new_block.block_reward, actual_height);
+			if c_difficulty != new_block.difficulty {
+				return Err(format!(
+					"Difficulty mismatch at block {}: expected {}, got {}",
+					new_block.height, c_difficulty, new_block.difficulty
+				).into());
+			}
+			
+			let hash = new_block.hash.clone();
+			new_block.signature = "".to_string();
+			new_block.hash = "".to_string();
+			let unhashed_serialized_block = serde_json::to_string_pretty(&new_block).unwrap();
+			let block_hash = keccak256(&unhashed_serialized_block);
+			
+			if hash != block_hash {
+				return Err(format!(
+					"Hash mismatch for block {}: expected {}, got {}",
+					new_block.height, block_hash, hash
+				).into());
+			}
+			new_block.hash = block_hash;
+			let unsigned_serialized_block = serde_json::to_string_pretty(&new_block).unwrap();
+			let block_signature = keccak256(&unsigned_serialized_block);
+			new_block.signature = block_signature;
+			
+			let diff_hex = format!("{:016X}", new_block.difficulty);
+			
+			let tx_parts: Vec<&str> = new_block.transactions.split('-').collect();
+			let first_two_txs = tx_parts.iter().take(2).cloned().collect::<Vec<&str>>().join("-");
+			
+			let mining_template = format!("{}-{}-{}-{}-{}-{}-{}", new_block.nonce, new_block.block_reward, 
+				diff_hex, new_block.height, new_block.prev_hash, new_block.miner, first_two_txs).to_lowercase();
+			let mining_hash = pokiohash_hash(&mining_template, &new_block.nonce);
+			let mining_difficulty = hash_to_difficulty(&mining_hash) as U256;
+			
+			if mining_difficulty < c_difficulty.into() {
+				/*return Err(format!(
+					"Difficulty mismatch for block {}: expected {}, got {}",
+					new_block.height, c_difficulty, mining_difficulty
+				).into());*/
+				println!("Difficulty mismatch for block {}: expected {}, got {}",
+					new_block.height, c_difficulty, mining_difficulty);
+			}
+			
+			/*let unsigned_serialized_block = serde_json::to_string_pretty(&new_block).unwrap();
+			let block_signature = keccak256(&unsigned_serialized_block);
+			new_block.signature = block_signature;
+			let serialized_block = bincode::serialize(&new_block).unwrap();
+			let unsigned_serialized_block = serde_json::to_string_pretty(&new_block).unwrap();*/
+			
 			let serialized_block = bincode::serialize(new_block)?;
 			let _ = db.insert(format!("block:{:08}", new_block.height), serialized_block)?;
 			let _ = db.insert(format!("hash:{}", new_block.hash), &new_block.height.to_be_bytes())?;
@@ -789,64 +739,106 @@ fn save_block_to_db(new_block: &mut Block) -> Result<(), Box<dyn Error>> {
 			let block_transactions: Vec<&str> = new_block.transactions.split('-').collect();
 
 			for tx_str in block_transactions {
-				if let Err(e) = mempooldb.remove(&tx_str) {
+				/*if let Err(e) = mempooldb.remove(&tx_str) {
 					eprintln!("Error deleting mempool entry: {:?}", e);
+				}*/
+				
+				if db.contains_key(tx_str)? {
+					continue;
+				}
+				let dtx = decode_transaction(tx_str);
+				match dtx {
+					Ok(tx) => {
+						let address = tx.to.map(|addr| format!("{:?}", addr)).unwrap_or("None".to_string());
+						let sender_address = format!("0x{}", hex::encode(tx.from));
+						let txhash = keccak256(&tx_str); //format!("0x{}", ethers::utils::hex::encode(tx.hash.to_string()));
+						let amount = tx.value.clone().to_string();
+						let fee = tx.gas * tx.gas_price.unwrap_or(EthersU256::zero());
+						let total_deducted = (tx.value + fee).to_string();
+						if tx.nonce < EthersU256::from(100_000_000u64) {
+							if let Err(e) = update_balance(&sender_address, &total_deducted, 1) {
+								//eprintln!("Error in transaction: {}", e);
+								let _ = db.insert(tx_str, b"error")?;
+							} else {
+								let _ = db.insert(tx_str, b"processed")?;
+								update_balance(&address, &amount, 0)
+									.expect("Error updating balance");
+								let nonce_key = format!("count:{}", sender_address);
+								let mut nonce_bytes = [0u8; 32];
+								tx.nonce.to_big_endian(&mut nonce_bytes);
+								let _ = db.insert(nonce_key.clone(), IVec::from(&nonce_bytes[..]))
+									.expect("Failed to store nonce in sled");
+							}
+							let receipt_key = format!("receipt:{}", txhash.clone());
+							db.insert(receipt_key, tx_str.clone().as_bytes())?;
+								
+							let (ah, _, _) = get_latest_block_info();
+							let txheight = ah + 1;
+							let receipt_key = format!("receiptblock:{}", txhash.clone());
+							db.insert(receipt_key, &txheight.to_be_bytes())?;							
+						}
+					}
+					Err(e) => {
+						eprintln!("Error processing tx: {:?}", e);
+					}
 				}
 			}
 			
-			println!("Block {} successfully saved in DB", new_block.height);
-			if let Some(block) = get_16th_block() {
-				let transactions: Vec<&str> = block.transactions.split('-').collect();
+			//println!("Block {} successfully saved in DB", new_block.height);
+			if new_block.height >= 16 {
+				if let Some(block) = get_16th_block() {
+					let transactions: Vec<&str> = block.transactions.split('-').collect();
 
-				for tx_str in transactions {
-					if db.contains_key(tx_str)? {
-						continue;
-					}
-					let dtx = decode_transaction(tx_str);
-					
-					match dtx {
-						Ok(tx) => {
-							let address = tx.to.map(|addr| format!("{:?}", addr)).unwrap_or("None".to_string());
-							let sender_address = format!("0x{}", hex::encode(tx.from));
-							let txhash = format!("0x{}", ethers::utils::hex::encode(tx.hash.to_string()));
-							let amount = tx.value.clone().to_string();
-							let fee = tx.gas * tx.gas_price.unwrap_or(EthersU256::zero());
-							let total_deducted = (tx.value + fee).to_string();
-								
-							if tx.nonce > EthersU256::from(100_000_000u64) {
-								update_balance(&address, &amount, 0).expect("Error updating balance");
-								let _ = db.insert(tx_str, b"processed")?;
-							}
-							else {
-								if let Err(e) = update_balance(&sender_address, &total_deducted, 1) {
-									eprintln!("Error in transaction: {}", e);
-									let _ = db.insert(tx_str, b"error")?;
-								} else {
+					for tx_str in transactions {
+						if db.contains_key(tx_str)? {
+							continue;
+						}
+						let dtx = decode_transaction(tx_str);
+						
+						match dtx {
+							Ok(tx) => {
+								let address = tx.to.map(|addr| format!("{:?}", addr)).unwrap_or("None".to_string());
+								let sender_address = format!("0x{}", hex::encode(tx.from));
+								let txhash = keccak256(&tx_str); //format!("0x{}", ethers::utils::hex::encode(tx.hash.to_string()));
+								let amount = tx.value.clone().to_string();
+								let fee = tx.gas * tx.gas_price.unwrap_or(EthersU256::zero());
+								let total_deducted = (tx.value + fee).to_string();
+									
+								if tx.nonce > EthersU256::from(100_000_000u64) {
+									update_balance(&address, &amount, 0).expect("Error updating balance");
 									let _ = db.insert(tx_str, b"processed")?;
-									update_balance(&address, &amount, 0)
-										.expect("Error updating balance");
-									let nonce_key = format!("count:{}", sender_address);
-									let mut nonce_bytes = [0u8; 32];
-									tx.nonce.to_big_endian(&mut nonce_bytes);
-									let _ = db.insert(nonce_key.clone(), IVec::from(&nonce_bytes[..]))
-										.expect("Failed to store nonce in sled");
 								}
-								
-								let receipt_key = format!("receipt:{}", txhash.clone());
-								db.insert(receipt_key, tx_str.clone().as_bytes())?;
-								
-								let (ah, _, _) = get_latest_block_info();
-								let txheight = ah + 1;
-								let receipt_key = format!("receiptblock:{}", txhash.clone());
-								db.insert(receipt_key, &txheight.to_be_bytes())?;							
+								else {
+									if let Err(e) = update_balance(&sender_address, &total_deducted, 1) {
+										//eprintln!("Error in transaction: {}", e);
+										let _ = db.insert(tx_str, b"error")?;
+									} else {
+										let _ = db.insert(tx_str, b"processed")?;
+										update_balance(&address, &amount, 0)
+											.expect("Error updating balance");
+										let nonce_key = format!("count:{}", sender_address);
+										let mut nonce_bytes = [0u8; 32];
+										tx.nonce.to_big_endian(&mut nonce_bytes);
+										let _ = db.insert(nonce_key.clone(), IVec::from(&nonce_bytes[..]))
+											.expect("Failed to store nonce in sled");
+									}
+									
+									let receipt_key = format!("receipt:{}", txhash.clone());
+									db.insert(receipt_key, tx_str.clone().as_bytes())?;
+									
+									let (ah, _, _) = get_latest_block_info();
+									let txheight = ah + 1;
+									let receipt_key = format!("receiptblock:{}", txhash.clone());
+									db.insert(receipt_key, &txheight.to_be_bytes())?;							
+								}
+							}
+							Err(e) => {
+								eprintln!("Error processing tx: {:?}", e);
 							}
 						}
-						Err(e) => {
-							eprintln!("Error processing tx: {:?}", e);
+						if let Err(e) = mempooldb.remove(&tx_str) {
+							eprintln!("Error deleting mempool entry: {:?}", e);
 						}
-					}
-					if let Err(e) = mempooldb.remove(&tx_str) {
-						eprintln!("Error deleting mempool entry: {:?}", e);
 					}
 				}
 			}
@@ -855,7 +847,7 @@ fn save_block_to_db(new_block: &mut Block) -> Result<(), Box<dyn Error>> {
 		Ok(())
 	})();
 	config::update_sync(0);
-    result
+	result
 }
 
 
@@ -894,7 +886,7 @@ fn start_nng_server(ips: Vec<String>) {
 				.collect();
 
 			loop {
-				if config::sync_status() == 0 {
+				if config::full_sync_status() == 0 {
 					let (actual_height, _actual_hash, _) = get_latest_block_info();
 					if actual_height != s_height {
 						let message = actual_height.to_string();
@@ -958,9 +950,9 @@ fn start_nng_server(ips: Vec<String>) {
 									let tx_value_str = String::from_utf8(value.to_vec()).unwrap_or_else(|_| String::from("Invalid UTF-8"));
 
 									if db.contains_key(tx_value_str.clone()).expect("REASON") {
-										if let Err(e) = mempooldb.remove(&tx_value_str) {
+										/*if let Err(e) = mempooldb.remove(&tx_value_str) {
 											eprintln!("Error deleting mempool entry: {:?}", e);
-										}
+										}*/
 										continue;
 									}
 
@@ -1038,94 +1030,96 @@ fn get_next_blocks(start_height: u64) -> Value {
 }
 
 fn store_raw_transaction(raw_tx: String) -> String {
-    let dtx = decode_transaction(&raw_tx);
-    match dtx {
-        Ok(decoded_tx) => {
-            let mempooldb = config::mempooldb();
+	let dtx = decode_transaction(&raw_tx);
+	match dtx {
+		Ok(decoded_tx) => {
+			let mempooldb = config::mempooldb();
 			let db = config::db();
-            let raw_tx_str = raw_tx.to_string();
+			let raw_tx_str = raw_tx.to_string();
 			let sender_address = format!("0x{}", hex::encode(decoded_tx.from));
-            let nonce_key = format!("count:{}", sender_address);
-            let last_nonce = get_last_nonce(&sender_address);
-            if decoded_tx.nonce != EthersU256::from(last_nonce + 1) {
-                return String::from("0x");
-            }
-            let _ = mempooldb.insert(raw_tx_str.clone(), IVec::from(raw_tx_str.as_bytes()))
-                .expect("Failed to store raw transaction in sled");
+			let nonce_key = format!("count:{}", sender_address);
+			let last_nonce = get_last_nonce(&sender_address);
+			if decoded_tx.nonce != EthersU256::from(last_nonce + 1) {
+				return String::from("0x");
+			}
+			let _ = mempooldb.insert(raw_tx_str.clone(), IVec::from(raw_tx_str.as_bytes()))
+				.expect("Failed to store raw transaction in sled");
 			let mut nonce_bytes = [0u8; 32];
-            decoded_tx.nonce.to_big_endian(&mut nonce_bytes);
-            let _ = db.insert(nonce_key.clone(), IVec::from(&nonce_bytes[..]))
+			decoded_tx.nonce.to_big_endian(&mut nonce_bytes);
+			let _ = db.insert(nonce_key.clone(), IVec::from(&nonce_bytes[..]))
 				.expect("Failed to store nonce in sled");
-            mempooldb.flush().expect("Failed to flush sled database");
+			mempooldb.flush().expect("Failed to flush sled database");
 			db.flush().expect("Failed to flush sled database");
-            decoded_tx.hash.to_string()
-        }
-        Err(_) => String::from("0x"),
-    }
+			//decoded_tx.hash.to_string()
+			keccak256(&raw_tx)
+		}
+		Err(_) => String::from("0x"),
+	}
 }
 
+
 fn get_last_nonce(address: &str) -> u64 {
-    let db = config::db();
-    let nonce_key = format!("count:{}", address.to_lowercase());
+	let db = config::db();
+	let nonce_key = format!("count:{}", address.to_lowercase());
 
-    if let Some(nonce_bytes) = db.get(&nonce_key).unwrap() {
-        let nonce_array: [u8; 32] = nonce_bytes.as_ref().try_into().unwrap();
-        let last_8_bytes = &nonce_array[24..];
+	if let Some(nonce_bytes) = db.get(&nonce_key).unwrap() {
+		let nonce_array: [u8; 32] = nonce_bytes.as_ref().try_into().unwrap();
+		let last_8_bytes = &nonce_array[24..];
 
-        u64::from_be_bytes(last_8_bytes.try_into().unwrap())
-    } else {
-        0
-    }
+		u64::from_be_bytes(last_8_bytes.try_into().unwrap())
+	} else {
+		0
+	}
 }
 
 fn save_miner(miner: &str, id: &str) {
 	let db = config::pooldb();
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_millis();
+	let timestamp = SystemTime::now()
+		.duration_since(UNIX_EPOCH)
+		.unwrap()
+		.as_millis();
 
-    let miner_data = json!({
-        "miner": miner,
-        "id": id,
-        "timestamp": timestamp
-    });
+	let miner_data = json!({
+		"miner": miner,
+		"id": id,
+		"timestamp": timestamp
+	});
 
-    let key = format!("miner_{}", id);
-    let _ = db.insert(key, serde_json::to_vec(&miner_data).unwrap()).unwrap();
+	let key = format!("miner_{}", id);
+	let _ = db.insert(key, serde_json::to_vec(&miner_data).unwrap()).unwrap();
 }
 
 fn count_active_miners(seconds: u64) -> HashMap<String, Vec<String>> {
 	let db = config::pooldb();
-    let mut miners_map: HashMap<String, Vec<String>> = HashMap::new();
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_millis();
+	let mut miners_map: HashMap<String, Vec<String>> = HashMap::new();
+	let now = SystemTime::now()
+		.duration_since(UNIX_EPOCH)
+		.unwrap()
+		.as_millis();
 
-    for item in db.iter() {
-        if let Ok((key, value)) = item {
-            let key_str = String::from_utf8_lossy(&key);
+	for item in db.iter() {
+		if let Ok((key, value)) = item {
+			let key_str = String::from_utf8_lossy(&key);
 
-            if key_str.starts_with("miner_") {
-                if let Ok(json) = serde_json::from_slice::<Value>(&value) {
-                    if let (Some(miner), Some(id), Some(timestamp)) = (
-                        json["miner"].as_str(),
-                        json["id"].as_str(),
-                        json["timestamp"].as_u64(),
-                    ) {
-                        if now - timestamp as u128 <= (seconds * 1000) as u128 {
-                            miners_map.entry(miner.to_string())
-                                .or_insert(Vec::new())
-                                .push(id.to_string());
-                        }
-                    }
-                }
-            }
-        }
-    }
+			if key_str.starts_with("miner_") {
+				if let Ok(json) = serde_json::from_slice::<Value>(&value) {
+					if let (Some(miner), Some(id), Some(timestamp)) = (
+						json["miner"].as_str(),
+						json["id"].as_str(),
+						json["timestamp"].as_u64(),
+					) {
+						if now - timestamp as u128 <= (seconds * 1000) as u128 {
+							miners_map.entry(miner.to_string())
+								.or_insert(Vec::new())
+								.push(id.to_string());
+						}
+					}
+				}
+			}
+		}
+	}
 
-    miners_map
+	miners_map
 }
 
 fn connect_to_nng_server(pserver: String) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -1181,10 +1175,9 @@ fn connect_to_nng_server(pserver: String) -> Result<(), Box<dyn std::error::Erro
 								std::thread::sleep(std::time::Duration::from_millis(10));
 							}
 							
-							config::update_sync(1);
 							if let Some(blocks_array) = blocks_json["result"].as_array() {
 								for block in blocks_array {
-									let new_block = Block {
+									let mut new_block = Block {
 										height: block.get("height").and_then(|v| v.as_u64()).expect("Missing height"),
 										hash: block.get("hash").and_then(|v| v.as_str()).map_or_else(|| "".to_string(), String::from),
 										prev_hash: block.get("prev_hash").and_then(|v| v.as_str()).map_or_else(|| "".to_string(), String::from),
@@ -1203,80 +1196,12 @@ fn connect_to_nng_server(pserver: String) -> Result<(), Box<dyn std::error::Erro
 										version: block.get("version").and_then(|v| v.as_u64()).map(|v| v as u32).expect("Missing version"),
 										signature: block.get("signature").and_then(|v| v.as_str()).map_or_else(|| "".to_string(), String::from),
 									};
-
-									let serialized_block = match bincode::serialize(&new_block) {
-										Ok(data) => data,
-										Err(e) => {
-											eprintln!("Error serializing block: {:?}", e);
-											continue;
-										}
-									};
-
-									if let Err(e) = db.insert(format!("block:{:08}", new_block.height), serialized_block) {
-										eprintln!("Error inserting block into DB: {:?}", e);
-										continue;
-									}
-
-									if let Err(e) = db.insert(format!("hash:{}", new_block.hash), &new_block.height.to_be_bytes()) {
-										eprintln!("Error inserting hash index: {:?}", e);
-										continue;
-									}
-
-									if let Err(e) = db.insert("chain:latest_block", &new_block.height.to_be_bytes()) {
-										eprintln!("Error updating latest block: {:?}", e);
-										continue;
-									}
-
-									if let Some(block) = get_16th_block() {
-										let transactions: Vec<&str> = block.transactions.split('-').collect();
-
-										for tx_str in transactions {
-											if db.contains_key(tx_str).expect("REASON") {
-												continue;
-											}
-											let dtx = decode_transaction(tx_str);
-											match dtx {
-												Ok(tx) => {
-													let address = tx.to.map(|addr| format!("{:?}", addr)).unwrap_or("None".to_string());
-													let sender_address = format!("0x{}", hex::encode(tx.from));
-													let amount = tx.value.clone().to_string();
-													let fee = tx.gas * tx.gas_price.unwrap_or(EthersU256::zero());
-													let total_deducted = (tx.value + fee).to_string();
-														
-													if tx.nonce > EthersU256::from(100_000_000u64) {
-														update_balance(&address, &amount, 0).expect("Error updating balance");
-														let _ = db.insert(tx_str, b"processed").expect("Failed to store in sled");
-													}
-													else {
-														if let Err(e) = update_balance(&sender_address, &total_deducted, 1) {
-															eprintln!("Error in transaction: {}", e);
-															let _ = db.insert(tx_str, b"error").expect("Failed to store in sled");
-														} else {
-															let _ = db.insert(tx_str, b"processed").expect("Failed to store in sled");
-															let nonce_key = format!("count:{}", sender_address);
-															let mut nonce_bytes = [0u8; 32];
-															tx.nonce.to_big_endian(&mut nonce_bytes);
-															let _ = db.insert(nonce_key.clone(), IVec::from(&nonce_bytes[..]))
-																.expect("Failed to store nonce in sled");
-															update_balance(&address, &amount, 0)
-																.expect("Error updating balance");
-														}
-													}
-												}
-												Err(e) => {
-													eprintln!("Error processing tx: {:?}", e);
-												}
-											}
-											if let Err(e) = mempooldb.remove(&tx_str) {
-												eprintln!("Error deleting mempool entry: {:?}", e);
-											}
-										}
-									} else {
-										break;
+									
+									if let Err(e) = save_block_to_db(&mut new_block) {
+										eprintln!("Error saving block: {}", e);
 									}
 								}
 							}
-							config::update_sync(0);
 							
 						}
 						Err(e) => {
@@ -1298,9 +1223,17 @@ fn connect_to_nng_server(pserver: String) -> Result<(), Box<dyn std::error::Erro
 #[tokio::main]
 async fn main() -> sled::Result<()> {
 	
+	let args: Vec<String> = env::args().collect();
+	let miningfee = args.iter().position(|arg| arg == "--fee")
+		.and_then(|i| args.get(i + 1))
+		.and_then(|t| t.parse::<usize>().ok())
+		.unwrap_or(5);
+	
 	config::load_key();
+	config::update_mining_fee(miningfee);
 	println!("Private key: {}", config::pkey());
 	println!("Address (hex): 0x{}", ethers::utils::hex::encode(config::address()));
+	println!("Mining fee set at: {}%", config::mining_fee());
 
 	println!("Starting NNG server...");
 	start_nng_server(vec![
@@ -1311,10 +1244,12 @@ async fn main() -> sled::Result<()> {
 	
 	println!("");
 	println!("Available commands:");
-	println!("  help     - Show this help message");
-	println!("  version  - Show server version");
-	println!("  miners   - Show active miners in the last 600 seconds");
+	println!("  help        - Show this help message");
+	println!("  version     - Show server version");
+	println!("  miners      - Show active miners in the last 600 seconds");
+	println!("  lastblock   - Show details of the most recently mined block");
 	println!("");
+
 	
 	// i/o thread
 	thread::spawn(move || {
@@ -1326,12 +1261,13 @@ async fn main() -> sled::Result<()> {
 			}
 			if input.trim() == "help" {
 				println!("Available commands:");
-				println!("  help     - Show this help message");
-				println!("  version  - Show server version");
-				println!("  miners   - Show active miners in the last 600 seconds");
+				println!("  help        - Show this help message");
+				println!("  version     - Show server version");
+				println!("  miners      - Show active miners in the last 600 seconds");
+				println!("  lastblock   - Show details of the most recently mined block");
 			}
 			if input.trim() == "miners" {
-				println!("Miners in last 600 seconds");
+				println!("Miners in last 600 seconds:");
 				let seconds = 600;
 				let mut active_workers = 0;
 				let active_miners = count_active_miners(seconds);
@@ -1341,15 +1277,18 @@ async fn main() -> sled::Result<()> {
 				}
 				println!("Total active workers: {}", active_workers);
 			}
+			if input.trim() == "lastblock" {
+				println!("Last mined block:");
+				let (actual_height, actual_hash, actual_ts) = get_latest_block_info();
+				println!("Height: {}, Hash: {}, Timestamp: {}", actual_height, actual_hash, actual_ts);
+			}
 		}
 	});
 	println!("Starting sync...");
-	
 	//-- sync at start
-	config::update_sync(1);
+	config::update_full_sync(1);
 	let _ = tokio::spawn(full_sync_blocks()).await.unwrap();
-	config::update_sync(0);
-	
+	config::update_full_sync(0);
 	println!("Sync ended. Starting server...");
 
 	//-- nng connect
@@ -1401,12 +1340,13 @@ async fn main() -> sled::Result<()> {
 					if let Some(params) = data["params"].as_array() {
 						if let Some(raw_tx) = params.get(0) {
 							if let Some(raw_tx_str) = raw_tx.as_str() {
-								println!("Get rawtx: {}", raw_tx_str);
+								//println!("Get rawtx: {}", raw_tx_str);
 								txhash = store_raw_transaction(raw_tx_str.to_string());
+								//println!("{}", txhash);
 							}
 						}
 					}
-					json!({"jsonrpc": "2.0", "id": id, "result": format!("0x{}", ethers::utils::hex::encode(txhash))})
+					json!({"jsonrpc": "2.0", "id": id, "result": format!("0x{}", txhash)})
 				},
 				"eth_getBlockByNumber" => {
 					let block_number = data["params"]
@@ -1504,10 +1444,10 @@ async fn main() -> sled::Result<()> {
 						.get(0)
 						.and_then(|v| v.as_str())
 						.unwrap_or("");
-					println!("Ask receipt: {}", txhash);
+					//println!("Ask receipt: {}", txhash);
 					if let Some((_receipt, block)) = get_receipt_info(txhash) {
 						let block_json = get_block_as_json(block);
-						println!("Block sent: {}", block_json);
+						//println!("Block sent: {}", block_json);
 						let hexblock = format!("0x{:x}", block);						
 						json!({"jsonrpc": "2.0", "id": id, "result": { "blockHash" : block_json.get("hash"), "blockNumber" : hexblock,
 							"contractAddress" : null, "cumulativeGasUsed" : "0x0", "effectiveGasPrice" : "0x0", "from" : "", "gasUsed" : "0x0",
@@ -1653,7 +1593,7 @@ async fn full_sync_blocks() -> Result<(), Box<dyn std::error::Error + Send + Syn
 				for (_i, block) in blocks_array.iter().enumerate() {
 					let first_block = block;
 
-					let new_block = Block {
+					let mut new_block = Block {
 						height: first_block.get("height").and_then(|v| v.as_u64()).expect("REASON"),
 						hash: first_block.get("hash").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| String::from("")),
 						prev_hash: first_block.get("prev_hash").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| String::from("")),
@@ -1672,116 +1612,11 @@ async fn full_sync_blocks() -> Result<(), Box<dyn std::error::Error + Send + Syn
 						version: first_block.get("version").and_then(|v| v.as_u64()).map(|v| v as u32).expect("REASON"),
 						signature: first_block.get("signature").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| String::from("")),
 					};
-					
-					//serialize block to save in sled
-					let serialized_block = bincode::serialize(&new_block).unwrap();
-					//height as key
-					let _ = db.insert(format!("block:{:08}", new_block.height), serialized_block)?;
-					//index hash -> height
-					let _ = db.insert(format!("hash:{}", new_block.hash), &new_block.height.to_be_bytes())?;
-					//save lastest_block
-					let _ = db.insert("chain:latest_block", &new_block.height.to_be_bytes())?;
 					let sync_height = new_block.height;
-					if sync_height >= 16 {
-						if let Some(block) = get_16th_block() {
-							let transactions: Vec<&str> = block.transactions.split('-').collect();
-
-							for tx_str in transactions {
-								if db.contains_key(tx_str)? {
-									continue;
-								}
-								let dtx = decode_transaction(tx_str);
-								match dtx {
-									Ok(tx) => {
-										let address = tx.to.map(|addr| format!("{:?}", addr)).unwrap_or("None".to_string());
-										let sender_address = format!("0x{}", hex::encode(tx.from));
-										let amount = tx.value.clone().to_string();
-										let txhash = format!("0x{}", ethers::utils::hex::encode(tx.hash.to_string()));
-										let fee = tx.gas * tx.gas_price.unwrap_or(EthersU256::zero());
-										let total_deducted = (tx.value + fee).to_string();
-											
-										if tx.nonce > EthersU256::from(100_000_000u64) {
-											update_balance(&address, &amount, 0).expect("Error updating balance");
-											let _ = db.insert(tx_str, b"processed")?;
-										}
-										else {
-											if let Err(e) = update_balance(&sender_address, &total_deducted, 1) {
-												eprintln!("Error in transaction: {}", e);
-												let _ = db.insert(tx_str, b"error")?;
-											} else {
-												let _ = db.insert(tx_str, b"processed")?;
-												update_balance(&address, &amount, 0)
-													.expect("Error updating balance");
-													
-												let nonce_key = format!("count:{}", sender_address);
-												let mut nonce_bytes = [0u8; 32];
-												tx.nonce.to_big_endian(&mut nonce_bytes);
-												let _ = db.insert(nonce_key.clone(), IVec::from(&nonce_bytes[..]))
-													.expect("Failed to store nonce in sled");
-											}
-											let receipt_key = format!("receipt:{}", txhash.clone());
-											db.insert(receipt_key, tx_str.clone().as_bytes())?;
-											
-											let (ah, _, _) = get_latest_block_info();
-											let txheight = ah + 1;
-											let receipt_key = format!("receiptblock:{}", txhash.clone());
-											db.insert(receipt_key, &txheight.to_be_bytes())?;
-										}
-									}
-									Err(e) => {
-										eprintln!("Error processing tx: {:?}", e);
-									}
-								}
-								if let Err(e) = mempooldb.remove(&tx_str) {
-									eprintln!("Error deleting mempool entry: {:?}", e);
-								}
-							}
-						} else {
-							break;
-						}
+					
+					if let Err(e) = save_block_to_db(&mut new_block) {
+						eprintln!("Error saving block: {}", e);
 					}
-
-					/*let receipts_root = merkle_tree(&new_block.transactions);
-					if receipts_root == new_block.receipts_root {
-						println!("Check merkle passed for block {}", new_block.height);
-					}  else { break; }
-					
-					let c_difficulty = calculate_diff(new_block.block_reward);
-					if c_difficulty == new_block.difficulty {
-						println!("Check diff passed for block {}", new_block.height);
-					}  else { break; }
-
-					let hash = new_block.hash.clone();
-					new_block.signature = "".to_string();
-					new_block.hash = "".to_string();
-
-					let unhashed_serialized_block = serde_json::to_string_pretty(&new_block).unwrap();
-					let block_hash = keccak256(&unhashed_serialized_block);
-
-					if hash == block_hash {
-						println!("Check hash passed for block {}", new_block.height);
-					} else { break; }
-
-					new_block.hash = block_hash;
-					
-					let diff_hex = format!("{:016X}", new_block.difficulty);
-					let mining_template = format!("{}-{}-{}-{}-{}-{}-{}", new_block.nonce, new_block.block_reward, 
-						diff_hex, new_block.height, new_block.prev_hash, new_block.miner, new_block.transactions).to_lowercase();
-					
-					println!("Diff: {}", mining_template);
-					
-					let mining_hash = pokiohash_hash(&mining_template, &new_block.nonce);
-					let mining_difficulty = hash_to_difficulty(&mining_hash) as U256;
-					
-					println!("Diff: {} {}", mining_hash, mining_difficulty);*/
-					/*
-					let unsigned_serialized_block = serde_json::to_string_pretty(&new_block).unwrap();
-					let block_signature = keccak256(&unsigned_serialized_block);
-					new_block.signature = block_signature;
-
-					let serialized_block = bincode::serialize(&new_block).unwrap();
-					let unsigned_serialized_block = serde_json::to_string_pretty(&new_block).unwrap();
-					*/
 				}
 			}
 			(actual_height, _actual_hash, _) = get_latest_block_info();

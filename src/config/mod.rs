@@ -12,6 +12,8 @@ static DB: OnceLock<sled::Db> = OnceLock::new();
 static MEMPOOLDB: OnceLock<sled::Db> = OnceLock::new();
 static POOLDB: OnceLock<sled::Db> = OnceLock::new();
 static SYNC_STATUS: OnceLock<AtomicUsize> = OnceLock::new();
+static FULL_SYNC_STATUS: OnceLock<AtomicUsize> = OnceLock::new();
+static MINING_FEE: OnceLock<AtomicUsize> = OnceLock::new();
 static ACTUAL_HEIGHT: OnceLock<AtomicUsize> = OnceLock::new();
 static ACTUAL_HASH: OnceLock<Mutex<String>> = OnceLock::new();
 static ACTUAL_TIMESTAMP: OnceLock<AtomicUsize> = OnceLock::new();
@@ -42,6 +44,8 @@ pub fn load_key() {
     POOLDB.set(pooldb).expect("Mempool was already initialized");
 
     SYNC_STATUS.set(AtomicUsize::new(0)).expect("Sync status already initialized");
+	FULL_SYNC_STATUS.set(AtomicUsize::new(0)).expect("Sync status already initialized");
+	MINING_FEE.set(AtomicUsize::new(3)).expect("Sync status already initialized");
 	
 	ACTUAL_HEIGHT.set(AtomicUsize::new(0)).expect("Actual height already initialized");
 	ACTUAL_HASH.set(Mutex::new("0000000000000000000000000000000000000000000000000000000000000000".to_string())).expect("Actual hash key was started");
@@ -68,12 +72,36 @@ pub fn pooldb() -> &'static sled::Db {
     POOLDB.get().expect("Database not loaded")
 }
 
+pub fn mining_fee() -> usize {
+    MINING_FEE.get().expect("Sync status not initialized").load(Ordering::SeqCst)
+}
+
+pub fn update_mining_fee(value: usize) {
+    if let Some(status) = MINING_FEE.get() {
+        status.store(value, Ordering::SeqCst);
+    } else {
+        panic!("Mining fee status not initialized");
+    }
+}
+
 pub fn sync_status() -> usize {
     SYNC_STATUS.get().expect("Sync status not initialized").load(Ordering::SeqCst)
 }
 
 pub fn update_sync(value: usize) {
     if let Some(status) = SYNC_STATUS.get() {
+        status.store(value, Ordering::SeqCst);
+    } else {
+        panic!("Sync status not initialized");
+    }
+}
+
+pub fn full_sync_status() -> usize {
+    FULL_SYNC_STATUS.get().expect("Sync status not initialized").load(Ordering::SeqCst)
+}
+
+pub fn update_full_sync(value: usize) {
+    if let Some(status) = FULL_SYNC_STATUS.get() {
         status.store(value, Ordering::SeqCst);
     } else {
         panic!("Sync status not initialized");
