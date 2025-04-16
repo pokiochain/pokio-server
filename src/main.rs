@@ -1257,7 +1257,7 @@ async fn main() -> sled::Result<()> {
 			let mut input = String::new();
 			io::stdin().read_line(&mut input).unwrap();
 			if input.trim() == "version" {
-				println!("Pokio server 0.1.3");
+				println!("Pokio server 0.1.5");
 			}
 			if input.trim() == "help" {
 				println!("Available commands:");
