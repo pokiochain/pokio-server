@@ -7,4 +7,4 @@ pub const MINING_TX_NONCE: u64 = 100000000;
 pub const HASHING_SPACE_COST: usize = 16;
 pub const HASHING_TIME_COST: usize = 20;
 pub const HASHING_DELTA: usize = 4;
-pub const UPDATE_1_HEIGHT: u64 = 150000;
+pub const UPDATE_1_HEIGHT: u64 = 200000;
