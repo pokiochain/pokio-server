@@ -38,8 +38,14 @@ use std::collections::HashMap;
 use std::env;
 use std::time::{Instant, Duration};
 
-
 mod config;
+mod constants;
+use constants::*;
+mod pokiohash;
+use pokiohash::*;
+mod merkle;
+use merkle::*;
+
 
 fn update_balance(address: &str, amount_to_add: &str, operation_type: u8) -> Result<(), Box<dyn std::error::Error>> {
 	let db = config::db();
@@ -146,95 +152,6 @@ fn calculate_message_hash(
 	H256::from_slice(&hash)
 }
 
-#[inline(always)]
-fn hash_func(args: &[&[u8]]) -> Vec<u8> {
-	let mut hasher = Sha256::new();
-	for arg in args {
-		hasher.update(arg);
-	}
-	hasher.finalize().to_vec()
-}
-
-fn expand(buf: &mut Vec<Vec<u8>>, space_cost: usize) {
-	buf.reserve(space_cost - 1);
-	for s in 1..space_cost {
-		let new_hash = hash_func(&[&buf[s - 1]]);
-		buf.push(new_hash);
-	}
-}
-
-fn mix(buf: &mut Vec<Vec<u8>>, delta: usize, salt: &[u8], space_cost: usize, time_cost: usize) {
-	for _ in 0..time_cost {
-		for s in 0..space_cost {
-			let prev = &buf[s.saturating_sub(1)];
-			buf[s] = hash_func(&[prev, &buf[s]]);
-			
-			for i in 0..delta {
-				let idx_block = hash_func(&[salt, &i.to_le_bytes()]);
-				let other = usize::from_le_bytes(idx_block[..8].try_into().unwrap()) % space_cost;
-				buf[s] = hash_func(&[&buf[s], &buf[other]]);
-			}
-		}
-	}
-}
-
-fn extract(buf: &[Vec<u8>]) -> Vec<u8> {
-	buf.last().unwrap().to_vec()
-}
-
-pub fn pokiohash(password: &str, salt: &str, space_cost: usize, time_cost: usize, delta: usize) -> Vec<u8> {
-	let salt_bytes = salt.as_bytes();
-	let mut buf = Vec::with_capacity(space_cost);
-	buf.push(hash_func(&[password.as_bytes(), salt_bytes]));
-	
-	expand(&mut buf, space_cost);
-	mix(&mut buf, delta, salt_bytes, space_cost, time_cost);
-	extract(&buf)
-}
-
-pub fn pokiohash_hash(password: &str, salt: &str) -> String {
-	let hash_bytes = pokiohash(password, salt, 16, 20, 4);
-	hex::encode(hash_bytes)
-}
-
-#[inline(always)]
-fn hash_to_difficulty(hash: &str) -> U256 {
-	let hash_value = U256::from_str_radix(hash, 16).unwrap_or(U256::zero());
-	let max_value = U256::MAX;
-	let difficulty = max_value / hash_value;
-	difficulty
-}
-
-fn merkle_tree(tx_str: &str) -> String {
-	let txs: Vec<&str> = tx_str.split('-').collect();
-	let mut hashes: Vec<String> = txs.into_iter().map(|tx| hash(tx)).collect();
-	while hashes.len() > 1 {
-		let mut new_hashes = Vec::new();
-		for chunk in hashes.chunks(2) {
-			if chunk.len() == 2 {
-				let combined_hash = combine_and_hash(&chunk[0], &chunk[1]);
-				new_hashes.push(combined_hash);
-			} else {
-				new_hashes.push(chunk[0].to_string());
-			}
-		}
-		hashes = new_hashes;
-	}
-	hashes[0].clone()
-}
-
-fn hash(tx: &str) -> String {
-	let mut hasher = Sha256::new();
-	hasher.update(tx.as_bytes());
-	let result = hasher.finalize();
-	hex::encode(result)
-}
-
-fn combine_and_hash(hash1: &str, hash2: &str) -> String {
-	let combined = format!("{}{}", hash1, hash2);
-	hash(&combined)
-}
-
 #[derive(Serialize, Deserialize, Debug)]
 struct Block {
 	height: u64,
@@ -279,7 +196,7 @@ fn get_latest_block_info() -> (u64, String, u64) {
 }
 
 fn calculate_diff(coins: u64, actual_height: u64) -> u64 {
-	if actual_height <= 16 {
+	if actual_height <= UNLOCK_OFFSET {
 		coins
 	}
 	else if actual_height >= 65002 {
@@ -318,7 +235,7 @@ fn get_mining_template(coins: &str, miner: &str) -> String {
 	let diff_dec = calculate_diff(coins_dec, actual_height);
 	let diff = format!("{:016X}", diff_dec);
 	
-	let nonce = 100000000 + height + 1;
+	let nonce = MINING_TX_NONCE + height + 1;
 	
 	let fee: u64 = config::mining_fee().try_into().unwrap();;
 	let _fee_biguint = BigUint::from(fee);
@@ -361,7 +278,7 @@ fn generate_reward_tx(
 	miner_address: &str,
 	reward_amount: EthersU256,
 ) -> eyre::Result<String> {
-	let wallet = LocalWallet::from_str(private_key)?.with_chain_id(850401u64);
+	let wallet = LocalWallet::from_str(private_key)?.with_chain_id(CHAIN_ID);
 
 	let tx = TransactionRequest::new()
 		.nonce(nonce)
@@ -434,7 +351,7 @@ fn decode_transaction(raw_tx_hex: &str) -> Result<Transaction> {
 }
 
 fn fix_blockchain(last_valid_height: u64) -> Option<Block> {
-	if last_valid_height > 16 {
+	if last_valid_height > UNLOCK_OFFSET {
 		let db = config::db();
 
 		let latest = db.get("chain:latest_block").unwrap();
@@ -462,7 +379,7 @@ fn get_16th_block() -> Option<Block> {
 		let latest_height = u64::from_be_bytes(latest.as_ref().try_into().unwrap());
 		let mut block_key = format!("block:{:08}", latest_height);
 
-		for i in 0..16 {
+		for i in 0..UNLOCK_OFFSET {
 			if let Some(block_data) = db.get(&block_key).unwrap() {
 				let block: Block = bincode::deserialize(&block_data).unwrap();
 
@@ -482,17 +399,17 @@ fn get_16th_block() -> Option<Block> {
 						let prev_block: Block = bincode::deserialize(&prev_block_data).unwrap();
 
 						if prev_block.hash != block.prev_hash {
-							println!("Reordering blockchain from block {}...", block.height - 2);
-							fix_blockchain(block.height - 200);
+							println!("Reordering blockchain from block...");
+							fix_blockchain(block.height - FIX_BC_OFFSET);
 							return None;
 						}
 						block_key = prev_block_key;
 					} else {
-						fix_blockchain(block.height - 200);
+						fix_blockchain(block.height - FIX_BC_OFFSET);
 						break;
 					}
 				} else {
-					fix_blockchain(block.height - 200);
+					fix_blockchain(block.height - FIX_BC_OFFSET);
 					break;
 				}
 			} else {
@@ -572,7 +489,7 @@ fn mine_block(coins: &str, miner: &str, nonce: &str) -> sled::Result<()> {
 				height: actual_height + 1,
 				hash: "".to_string(),
 				prev_hash: actual_hash,
-				timestamp: valid_timestamp, // + config::ts_diff(),
+				timestamp: valid_timestamp,
 				nonce: nonce.to_string(),
 				//transactions: vec!["tx1".to_string(), "tx2".to_string()],
 				transactions: block_transactions.to_string(),
@@ -692,7 +609,7 @@ fn save_block_to_db(new_block: &mut Block) -> Result<(), Box<dyn Error>> {
 		
 		if expected_height == new_block.height && prev_hash == new_block.prev_hash {
 			
-			if new_block.height > 200000 && new_block.timestamp < ts {
+			if new_block.height > UPDATE_1_HEIGHT && new_block.timestamp < ts {
 				return Err(format!(
 					"Invalid timestamp for block {}: expected >= {}, got {}",
 					new_block.height, ts, new_block.timestamp
@@ -742,7 +659,7 @@ fn save_block_to_db(new_block: &mut Block) -> Result<(), Box<dyn Error>> {
 			let mining_hash = pokiohash_hash(&mining_template, &new_block.nonce);
 			let mining_difficulty = hash_to_difficulty(&mining_hash) as U256;
 			
-			if new_block.height > 200000 && mining_difficulty < c_difficulty.into() {
+			if new_block.height > UPDATE_1_HEIGHT && mining_difficulty < c_difficulty.into() {
 				return Err(format!(
 					"Difficulty mismatch for block {}: expected {}, got {}",
 					new_block.height, c_difficulty, mining_difficulty
@@ -810,7 +727,7 @@ fn save_block_to_db(new_block: &mut Block) -> Result<(), Box<dyn Error>> {
 			}
 			
 			//println!("Block {} successfully saved in DB", new_block.height);
-			if new_block.height >= 16 {
+			if new_block.height >= UNLOCK_OFFSET {
 				if let Some(block) = get_16th_block() {
 					let transactions: Vec<&str> = block.transactions.split('-').collect();
 
@@ -1066,8 +983,6 @@ fn get_mempool_records() -> serde_json::Value {
     json!(records)
 }
 
-
-
 fn store_raw_transaction(raw_tx: String) -> String {
 	let dtx = decode_transaction(&raw_tx);
 	match dtx {
@@ -1290,10 +1205,17 @@ fn connect_to_nng_server(pserver: String) -> Result<(), Box<dyn std::error::Erro
 #[tokio::main]
 async fn main() -> sled::Result<()> {	
 	let args: Vec<String> = env::args().collect();
-	let miningfee = args.iter().position(|arg| arg == "--fee")
+	let pre_miningfee = args.iter().position(|arg| arg == "--fee")
 		.and_then(|i| args.get(i + 1))
 		.and_then(|t| t.parse::<usize>().ok())
-		.unwrap_or(5);
+		.unwrap_or(DEFAULT_MINING_FEE);
+	let miningfee;
+	
+	if pre_miningfee > 50 {
+		miningfee = 50;
+	} else {
+		miningfee = pre_miningfee;
+	}
 	
 	config::load_key();
 	config::update_mining_fee(miningfee);
@@ -1406,7 +1328,7 @@ async fn main() -> sled::Result<()> {
 					json!({"jsonrpc": "2.0", "id": id, "result": mempool})
 				},
 				//get_mempool_records
-				"eth_chainId" => json!({"jsonrpc": "2.0", "id": id, "result": "0xcf9e1"}),
+				"eth_chainId" => json!({"jsonrpc": "2.0", "id": id, "result": format!("0x{:x}", CHAIN_ID)}),
 				"eth_getCode" => json!({"jsonrpc": "2.0", "id": id, "result": "0x"}),
 				"eth_estimateGas" => json!({"jsonrpc": "2.0", "id": id, "result": "0x5208"}),
 				"eth_gasPrice" => json!({"jsonrpc": "2.0", "id": id, "result": "0x27eda12b"}),
@@ -1444,77 +1366,40 @@ async fn main() -> sled::Result<()> {
 						.and_then(|v| v.as_str())
 						.and_then(|s| u64::from_str_radix(s.trim_start_matches("0x"), 16).ok())
 						.unwrap_or(1);
+
 					let mut block_json = get_block_as_json(block_number);
-					
-					if let Value::Object(mut obj) = block_json {
-						if let Some(height) = obj.remove("height") {
-							obj.insert("number".to_string(), height);
-						}
-						block_json = Value::Object(obj);
-					}
-					
-					if let Value::Object(mut obj) = block_json {
-						if let Some(state_root) = obj.remove("state_root") {
-							obj.insert("stateRoot".to_string(), state_root);
-						}
-						block_json = Value::Object(obj);
-					}
-					
-					if let Value::Object(mut obj) = block_json {
-						if let Some(prev_hash) = obj.remove("prev_hash") {
-							obj.insert("parentHash".to_string(), prev_hash);
-						}
-						block_json = Value::Object(obj);
-					}
-					
+
 					if let Value::Object(ref mut obj) = block_json {
-						if let Some(timestamp) = obj.remove("timestamp") {
-							if let Some(mut_number) = timestamp.as_u64() {
-								let hex_timestamp = format!("0x{:x}", mut_number);
-								obj.insert("timestamp".to_string(), Value::String(hex_timestamp));
+						let field_mappings = [
+							("height", "number"),
+							("state_root", "stateRoot"),
+							("prev_hash", "parentHash"),
+						];
+						for (old_key, new_key) in &field_mappings {
+							if let Some(value) = obj.remove(*old_key) {
+								obj.insert(new_key.to_string(), value);
+							}
+						}
+
+						let hex_fields = [
+							"timestamp",
+							"difficulty",
+							"gas_limit",
+							"gas_used",
+							"number",
+						];
+						for field in &hex_fields {
+							if let Some(value) = obj.remove(*field) {
+								if let Some(num) = value.as_u64() {
+									obj.insert(field.to_string(), Value::String(format!("0x{:x}", num)));
+								}
 							}
 						}
 					}
-					
-					if let Value::Object(ref mut obj) = block_json {
-						if let Some(difficulty) = obj.remove("difficulty") {
-							if let Some(mut_number) = difficulty.as_u64() {
-								let hex_timestamp = format!("0x{:x}", mut_number);
-								obj.insert("difficulty".to_string(), Value::String(hex_timestamp));
-							}
-						}
-					}
-					
-					if let Value::Object(ref mut obj) = block_json {
-						if let Some(gas_limit) = obj.remove("gas_limit") {
-							if let Some(mut_number) = gas_limit.as_u64() {
-								let hex_timestamp = format!("0x{:x}", mut_number);
-								obj.insert("gas_limit".to_string(), Value::String(hex_timestamp));
-							}
-						}
-					}
-					
-					if let Value::Object(ref mut obj) = block_json {
-						if let Some(gas_used) = obj.remove("gas_used") {
-							if let Some(mut_number) = gas_used.as_u64() {
-								let hex_timestamp = format!("0x{:x}", mut_number);
-								obj.insert("gas_used".to_string(), Value::String(hex_timestamp));
-							}
-						}
-					}
-					
-					if let Value::Object(ref mut obj) = block_json {
-						if let Some(number) = obj.remove("number") {
-							if let Some(mut_number) = number.as_u64() {
-								let hex_timestamp = format!("0x{:x}", mut_number);
-								obj.insert("number".to_string(), Value::String(hex_timestamp));
-							}
-						}
-					}
-					
-					json!({"jsonrpc": "2.0", "id": id, "result": block_json})
+
+					json!({ "jsonrpc": "2.0", "id": id, "result": block_json })
 				},
-				"net_version" => json!({"jsonrpc": "2.0", "id": id, "result": "850401"}),
+				"net_version" => json!({"jsonrpc": "2.0", "id": id, "result": CHAIN_ID.to_string()}),
 				"eth_getBalance" => {
 					let address = data["params"]
 						.get(0)
