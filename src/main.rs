@@ -29,7 +29,6 @@ use serde_json::Value;
 use num_traits::Zero;
 use std::cmp::max; 
 use nng::{Socket, Protocol};
-use std::time::Duration;
 use reqwest::Client;
 use sled::IVec;
 use nng::options::protocol::pubsub::Subscribe;
@@ -37,6 +36,8 @@ use nng::options::Options;
 use std::error::Error;
 use std::collections::HashMap;
 use std::env;
+use std::time::{Instant, Duration};
+
 
 mod config;
 
@@ -58,7 +59,6 @@ fn update_balance(address: &str, amount_to_add: &str, operation_type: u8) -> Res
 
 	let new_balance = if operation_type == 1 {
 		if amount_to_add_biguint > current_balance {
-			//println!("{} -> {}", address, amount_to_add);
 			return Err("Insufficient balance".into());
 		}
 		current_balance - amount_to_add_biguint
@@ -313,7 +313,6 @@ fn get_mining_template(coins: &str, miner: &str) -> String {
 			0,
 		)
 	};
-	
 	let coins_dec = max(10, coins.parse::<u64>().unwrap_or(10));
 	let (actual_height, _, _) = get_latest_block_info();
 	let diff_dec = calculate_diff(coins_dec, actual_height);
@@ -336,8 +335,6 @@ fn get_mining_template(coins: &str, miner: &str) -> String {
 	let wei_amount = (coins_biguint * &base_wei) - fee_wei_amount;
 	let reward_amount = EthersU256::from_dec_str(&wei_amount.to_str_radix(10)).unwrap();
 	let raw_tx: String;
-	
-	//println!("{} -- {}", reward_amount, fee_reward_amount);
 
 	match generate_reward_tx(config::pkey(), nonce, miner, reward_amount) {
 		Ok(tx) => {
@@ -347,7 +344,6 @@ fn get_mining_template(coins: &str, miner: &str) -> String {
 			raw_tx = String::new();
 		}
 	}
-
 	match generate_reward_tx(config::pkey(), nonce, &signer, fee_reward_amount) {
 		Ok(tx) => {
 			fee_raw_tx = tx;
@@ -560,11 +556,17 @@ fn mine_block(coins: &str, miner: &str, nonce: &str) -> sled::Result<()> {
 		let db = config::db();
 		if mining_difficulty > block_difficulty.into()
 		{
-			let (actual_height, actual_hash, _) = get_latest_block_info();
+			let (actual_height, actual_hash, actual_ts) = get_latest_block_info();
 			let now_secs = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
 			let ts_diff = config::ts_diff();
 			let ts_result = now_secs + ts_diff;
-			let valid_timestamp = ts_result as u64;
+			let pre_timestamp = ts_result as u64;
+			let valid_timestamp;
+			if pre_timestamp < actual_ts {
+				valid_timestamp = actual_ts;
+			} else {
+				valid_timestamp = pre_timestamp;
+			}
 
 			let mut new_block = Block {
 				height: actual_height + 1,
@@ -595,6 +597,10 @@ fn mine_block(coins: &str, miner: &str, nonce: &str) -> sled::Result<()> {
 					Ok((key, value)) => {
 						let tx_value_str = String::from_utf8(value.to_vec()).unwrap_or_else(|_| String::from("Invalid UTF-8"));
 						let tx_str = tx_value_str.clone();
+						if db.contains_key(tx_str.clone())? {
+        		            continue;
+                        }
+
 						let dtx = decode_transaction(&tx_str);
 						match dtx {
 							Ok(tx) => {
@@ -764,6 +770,7 @@ fn save_block_to_db(new_block: &mut Block) -> Result<(), Box<dyn Error>> {
 				if db.contains_key(tx_str)? {
 					continue;
 				}
+
 				let dtx = decode_transaction(tx_str);
 				match dtx {
 					Ok(tx) => {
@@ -781,7 +788,7 @@ fn save_block_to_db(new_block: &mut Block) -> Result<(), Box<dyn Error>> {
 								let _ = db.insert(tx_str, b"processed")?;
 								update_balance(&address, &amount, 0)
 									.expect("Error updating balance");
-								let nonce_key = format!("count:{}", sender_address);
+								let nonce_key = format!("count:{}", sender_address.to_lowercase());
 								let mut nonce_bytes = [0u8; 32];
 								tx.nonce.to_big_endian(&mut nonce_bytes);
 								let _ = db.insert(nonce_key.clone(), IVec::from(&nonce_bytes[..]))
@@ -968,9 +975,6 @@ fn start_nng_server(ips: Vec<String>) {
 									let tx_value_str = String::from_utf8(value.to_vec()).unwrap_or_else(|_| String::from("Invalid UTF-8"));
 
 									if db.contains_key(tx_value_str.clone()).expect("REASON") {
-										/*if let Err(e) = mempooldb.remove(&tx_value_str) {
-											eprintln!("Error deleting mempool entry: {:?}", e);
-										}*/
 										continue;
 									}
 
@@ -989,7 +993,7 @@ fn start_nng_server(ips: Vec<String>) {
 											match client.post(&url).json(&payload).send().await {
 												Ok(resp) => {
 													if let Ok(text) = resp.text().await {
-														//println!("TX Sent to {}: {}", url, text);
+														println!("TX Sent to {}: {}", url, text);
 													}
 												}
 												Err(e) => eprintln!("Error sending to {}: {:?}", url, e),
@@ -999,7 +1003,7 @@ fn start_nng_server(ips: Vec<String>) {
 									futures::future::join_all(futures).await;
 									//println!("rawtx Value: {:?}", tx_value_str);
 									
-									let dtx = decode_transaction(&tx_value_str);
+									/*let dtx = decode_transaction(&tx_value_str);
 									match dtx {
 										Ok(decoded_tx) => {
 											let sender_address = format!("0x{}", hex::encode(decoded_tx.from));
@@ -1012,7 +1016,7 @@ fn start_nng_server(ips: Vec<String>) {
 											}
 										}
 										Err(_) => {}
-									}
+									}*/
 									
 								}
 								Err(e) => {
@@ -1047,6 +1051,23 @@ fn get_next_blocks(start_height: u64) -> Value {
 	json!(blocks)
 }
 
+fn get_mempool_records() -> serde_json::Value {
+    let mut records = Vec::new();
+    let db = config::mempooldb();
+
+    for result in db.iter() {
+        if let Ok((_, value)) = result {
+            if let Ok(raw_tx) = std::str::from_utf8(&value) {
+                records.push(raw_tx.to_string());
+            }
+        }
+    }
+
+    json!(records)
+}
+
+
+
 fn store_raw_transaction(raw_tx: String) -> String {
 	let dtx = decode_transaction(&raw_tx);
 	match dtx {
@@ -1057,9 +1078,12 @@ fn store_raw_transaction(raw_tx: String) -> String {
 			let sender_address = format!("0x{}", hex::encode(decoded_tx.from));
 			//let nonce_key = format!("count:{}", sender_address);
 			let last_nonce = get_last_nonce(&sender_address);
-			if decoded_tx.nonce != EthersU256::from(last_nonce + 1) {
-				return String::from("0x");
-			}
+			if decoded_tx.nonce < EthersU256::from(last_nonce + 1) {
+				//println!("Invalid nonce: {}, expected: {}", decoded_tx.nonce, last_nonce);
+				return String::from("");
+			} /*else {
+				println!("Valid nonce {}", decoded_tx.nonce);
+			}*/
 			let _ = mempooldb.insert(raw_tx_str.clone(), IVec::from(raw_tx_str.as_bytes()))
 				.expect("Failed to store raw transaction in sled");
 			let mut nonce_bytes = [0u8; 32];
@@ -1071,7 +1095,7 @@ fn store_raw_transaction(raw_tx: String) -> String {
 			//decoded_tx.hash.to_string()
 			keccak256(&raw_tx)
 		}
-		Err(_) => String::from("0x"),
+		Err(_) => String::from(""),
 	}
 }
 
@@ -1152,14 +1176,39 @@ fn connect_to_nng_server(pserver: String) -> Result<(), Box<dyn std::error::Erro
 			let socket = Socket::new(Protocol::Sub0).expect("Can't connect to NNG server");
 			let _ = socket.set_opt::<Subscribe>(vec![]);
 			let nng_url = format!("tcp://{}:5555", pserver);
-			
 			socket
 				.dial(&nng_url)
 				.expect("Can't connect to NNG server");
 			println!("Connected to {} NNG server", pserver);
-
+			let mut last_mempool_check = Instant::now();
 			loop {
 				if config::sync_status() == 0 {
+					if last_mempool_check.elapsed() >= Duration::from_secs(5) {
+						last_mempool_check = Instant::now();
+						if let Ok(response) = client
+							.post(rpc_url.clone())
+							.json(&json!({
+								"jsonrpc": "2.0",
+								"id": 1,
+								"method": "pokio_getMempool",
+								"params": []
+							}))
+							.send()
+							.await
+						{
+							if let Ok(json_response) = response.json::<serde_json::Value>().await {
+								if let Some(mempool_array) = json_response["result"].as_array() {
+									for raw_tx in mempool_array {
+										if let Some(raw_tx_str) = raw_tx.as_str() {
+											let _txres = store_raw_transaction(raw_tx_str.to_string());
+											//println!("tx {} stored in mempool", txres);
+										}
+									}
+								}
+							}
+						}
+					}
+					
 					match socket.recv() {
 						Ok(_msg) => {
 							let (actual_height, _actual_hash, _) = get_latest_block_info();
@@ -1260,7 +1309,10 @@ async fn main() -> sled::Result<()> {
                     .duration_since(UNIX_EPOCH)
                     .unwrap()
                     .as_secs();
-                let diff = remote_ts as i64 - local_ts as i64;
+                let mut diff = remote_ts as i64 - local_ts as i64;
+				if diff > 0 {
+					diff = diff - 1;
+				}
 				config::update_ts_diff(diff);
             }
         }
@@ -1349,6 +1401,11 @@ async fn main() -> sled::Result<()> {
 					let blocks = get_next_blocks(block_number);
 					json!({"jsonrpc": "2.0", "id": id, "result": blocks})
 				},
+				"pokio_getMempool" => {
+					let mempool = get_mempool_records();
+					json!({"jsonrpc": "2.0", "id": id, "result": mempool})
+				},
+				//get_mempool_records
 				"eth_chainId" => json!({"jsonrpc": "2.0", "id": id, "result": "0xcf9e1"}),
 				"eth_getCode" => json!({"jsonrpc": "2.0", "id": id, "result": "0x"}),
 				"eth_estimateGas" => json!({"jsonrpc": "2.0", "id": id, "result": "0x5208"}),
@@ -1359,6 +1416,7 @@ async fn main() -> sled::Result<()> {
 						.and_then(|v| v.as_str())
 						.unwrap_or("");
 					let last_nonce = get_last_nonce(&address) + 1;
+					//println!("last nonce: {}", last_nonce);
 					let hex_nonce = format!("0x{:x}", last_nonce);
 					json!({"jsonrpc": "2.0", "id": id, "result": hex_nonce })
 				}
@@ -1607,35 +1665,25 @@ async fn main() -> sled::Result<()> {
 
 async fn full_sync_blocks() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 	let client = Client::new();
-	let rpc_url = "http://62.113.200.176:30303/rpc";
+	let rpc_url = "http://207.180.213.141:30303/rpc";
 	let db = config::db();
-	let mempooldb = config::mempooldb();
-
 	loop {
 		let max_block_response = client.post(rpc_url)
 			.json(&json!({ "jsonrpc": "2.0", "id": 1, "method": "eth_blockNumber", "params": [] }))
 			.send()
 			.await?;
-
 		let max_block_json: serde_json::Value = max_block_response.json().await?;
 		let max_block = u64::from_str_radix(max_block_json["result"].as_str().unwrap().trim_start_matches("0x"), 16)?;
-		
 		let (mut actual_height, mut _actual_hash, _) = get_latest_block_info();
-
 		while actual_height < max_block {
-		
 			let blocks_response = client.post(rpc_url)
 				.json(&json!({ "jsonrpc": "2.0", "id": 1, "method": "pokio_getBlocks", "params": [(actual_height+1).to_string()] }))
 				.send()
 				.await?;
-
 			let blocks_json: serde_json::Value = blocks_response.json().await?;
 			if let Some(blocks_array) = blocks_json["result"].as_array() {
-				let _total_blocks = blocks_array.len();
-
 				for (_i, block) in blocks_array.iter().enumerate() {
 					let first_block = block;
-
 					let mut new_block = Block {
 						height: first_block.get("height").and_then(|v| v.as_u64()).expect("REASON"),
 						hash: first_block.get("hash").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| String::from("")),
@@ -1655,8 +1703,6 @@ async fn full_sync_blocks() -> Result<(), Box<dyn std::error::Error + Send + Syn
 						version: first_block.get("version").and_then(|v| v.as_u64()).map(|v| v as u32).expect("REASON"),
 						signature: first_block.get("signature").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| String::from("")),
 					};
-					let sync_height = new_block.height;
-					
 					if let Err(e) = save_block_to_db(&mut new_block) {
 						eprintln!("Error saving block: {}", e);
 					}
