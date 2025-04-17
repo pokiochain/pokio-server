@@ -834,11 +834,11 @@ fn save_block_to_db(new_block: &mut Block) -> Result<(), Box<dyn Error>> {
 										let _ = db.insert(tx_str, b"processed")?;
 										update_balance(&address, &amount, 0)
 											.expect("Error updating balance");
-										let nonce_key = format!("count:{}", sender_address);
+										/*let nonce_key = format!("count:{}", sender_address);
 										let mut nonce_bytes = [0u8; 32];
 										tx.nonce.to_big_endian(&mut nonce_bytes);
 										let _ = db.insert(nonce_key.clone(), IVec::from(&nonce_bytes[..]))
-											.expect("Failed to store nonce in sled");
+											.expect("Failed to store nonce in sled");*/
 									}
 									
 									let receipt_key = format!("receipt:{}", txhash.clone());
@@ -1055,7 +1055,7 @@ fn store_raw_transaction(raw_tx: String) -> String {
 			let db = config::db();
 			let raw_tx_str = raw_tx.to_string();
 			let sender_address = format!("0x{}", hex::encode(decoded_tx.from));
-			let nonce_key = format!("count:{}", sender_address);
+			//let nonce_key = format!("count:{}", sender_address);
 			let last_nonce = get_last_nonce(&sender_address);
 			if decoded_tx.nonce != EthersU256::from(last_nonce + 1) {
 				return String::from("0x");
@@ -1064,8 +1064,8 @@ fn store_raw_transaction(raw_tx: String) -> String {
 				.expect("Failed to store raw transaction in sled");
 			let mut nonce_bytes = [0u8; 32];
 			decoded_tx.nonce.to_big_endian(&mut nonce_bytes);
-			let _ = db.insert(nonce_key.clone(), IVec::from(&nonce_bytes[..]))
-				.expect("Failed to store nonce in sled");
+			//let _ = db.insert(nonce_key.clone(), IVec::from(&nonce_bytes[..]))
+			//	.expect("Failed to store nonce in sled");
 			mempooldb.flush().expect("Failed to flush sled database");
 			db.flush().expect("Failed to flush sled database");
 			//decoded_tx.hash.to_string()
