@@ -282,8 +282,9 @@ fn calculate_diff(coins: u64, actual_height: u64) -> u64 {
 	if actual_height <= 16 {
 		coins
 	}
-	else if actual_height >= 65002 { //fix
-		coins * (5000000 - ( coins * 100) )
+	else if actual_height >= 65002 {
+		if coins < 10000 { coins * (5000000 - ( coins * 100) ) }
+		else { coins * (5000000 - ( 1000000) ) }
 	}
 	else
 	{
@@ -560,12 +561,16 @@ fn mine_block(coins: &str, miner: &str, nonce: &str) -> sled::Result<()> {
 		if mining_difficulty > block_difficulty.into()
 		{
 			let (actual_height, actual_hash, _) = get_latest_block_info();
+			let now_secs = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
+			let ts_diff = config::ts_diff();
+			let ts_result = now_secs + ts_diff;
+			let valid_timestamp = ts_result as u64;
 
 			let mut new_block = Block {
 				height: actual_height + 1,
 				hash: "".to_string(),
 				prev_hash: actual_hash,
-				timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
+				timestamp: valid_timestamp, // + config::ts_diff(),
 				nonce: nonce.to_string(),
 				//transactions: vec!["tx1".to_string(), "tx2".to_string()],
 				transactions: block_transactions.to_string(),
@@ -679,7 +684,15 @@ fn save_block_to_db(new_block: &mut Block) -> Result<(), Box<dyn Error>> {
 		
 		let expected_height: u64 = actual_height.clone() + 1;
 		
-		if expected_height == new_block.height && prev_hash == new_block.prev_hash {//&& new_block.timestamp >= ts {
+		if expected_height == new_block.height && prev_hash == new_block.prev_hash {
+			
+			if new_block.height > 200000 && new_block.timestamp < ts {
+				return Err(format!(
+					"Invalid timestamp for block {}: expected >= {}, got {}",
+					new_block.height, ts, new_block.timestamp
+				).into());
+			}
+			
 			let receipts_root = merkle_tree(&new_block.transactions);
 			if receipts_root != new_block.receipts_root {
 				return Err(format!(
@@ -723,13 +736,11 @@ fn save_block_to_db(new_block: &mut Block) -> Result<(), Box<dyn Error>> {
 			let mining_hash = pokiohash_hash(&mining_template, &new_block.nonce);
 			let mining_difficulty = hash_to_difficulty(&mining_hash) as U256;
 			
-			if mining_difficulty < c_difficulty.into() {
-				/*return Err(format!(
+			if new_block.height > 200000 && mining_difficulty < c_difficulty.into() {
+				return Err(format!(
 					"Difficulty mismatch for block {}: expected {}, got {}",
 					new_block.height, c_difficulty, mining_difficulty
-				).into());*/
-				println!("Difficulty mismatch for block {}: expected {}, got {}",
-					new_block.height, c_difficulty, mining_difficulty);
+				).into());
 			}
 			
 			/*let unsigned_serialized_block = serde_json::to_string_pretty(&new_block).unwrap();
@@ -1228,8 +1239,7 @@ fn connect_to_nng_server(pserver: String) -> Result<(), Box<dyn std::error::Erro
 
 
 #[tokio::main]
-async fn main() -> sled::Result<()> {
-	
+async fn main() -> sled::Result<()> {	
 	let args: Vec<String> = env::args().collect();
 	let miningfee = args.iter().position(|arg| arg == "--fee")
 		.and_then(|i| args.get(i + 1))
@@ -1241,6 +1251,21 @@ async fn main() -> sled::Result<()> {
 	println!("Private key: {}", config::pkey());
 	println!("Address (hex): 0x{}", ethers::utils::hex::encode(config::address()));
 	println!("Mining fee set at: {}%", config::mining_fee());
+	
+	let response = reqwest::get("https://pokio.xyz/ts.php").await;
+    if let Ok(resp) = response {
+        if let Ok(text) = resp.text().await {
+            if let Ok(remote_ts) = text.trim().parse::<u64>() {
+                let local_ts = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs();
+                let diff = remote_ts as i64 - local_ts as i64;
+				config::update_ts_diff(diff);
+            }
+        }
+    }
+	println!("Adjusted timestamp diff: {} seconds", config::ts_diff());
 
 	println!("Starting NNG server...");
 	start_nng_server(vec![

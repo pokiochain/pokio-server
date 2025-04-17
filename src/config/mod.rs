@@ -3,7 +3,7 @@ use ethers::types::Address;
 use serde::Deserialize;
 use std::fs;
 use std::str::FromStr;
-use std::sync::{Mutex, OnceLock, atomic::{AtomicUsize, Ordering}};
+use std::sync::{Mutex, OnceLock, atomic::{AtomicI64, AtomicUsize, Ordering}};
 use sled;
 
 static PKEY: OnceLock<String> = OnceLock::new();
@@ -13,6 +13,7 @@ static MEMPOOLDB: OnceLock<sled::Db> = OnceLock::new();
 static POOLDB: OnceLock<sled::Db> = OnceLock::new();
 static SYNC_STATUS: OnceLock<AtomicUsize> = OnceLock::new();
 static FULL_SYNC_STATUS: OnceLock<AtomicUsize> = OnceLock::new();
+static TS_DIFF: OnceLock<AtomicI64> = OnceLock::new();
 static MINING_FEE: OnceLock<AtomicUsize> = OnceLock::new();
 static ACTUAL_HEIGHT: OnceLock<AtomicUsize> = OnceLock::new();
 static ACTUAL_HASH: OnceLock<Mutex<String>> = OnceLock::new();
@@ -44,8 +45,9 @@ pub fn load_key() {
     POOLDB.set(pooldb).expect("Mempool was already initialized");
 
     SYNC_STATUS.set(AtomicUsize::new(0)).expect("Sync status already initialized");
-	FULL_SYNC_STATUS.set(AtomicUsize::new(0)).expect("Sync status already initialized");
-	MINING_FEE.set(AtomicUsize::new(3)).expect("Sync status already initialized");
+	FULL_SYNC_STATUS.set(AtomicUsize::new(0)).expect("Full sync status already initialized");
+	MINING_FEE.set(AtomicUsize::new(3)).expect("Mining fee status already initialized");
+	TS_DIFF.set(AtomicI64::new(0)).expect("Timestamp diff status already initialized");
 	
 	ACTUAL_HEIGHT.set(AtomicUsize::new(0)).expect("Actual height already initialized");
 	ACTUAL_HASH.set(Mutex::new("0000000000000000000000000000000000000000000000000000000000000000".to_string())).expect("Actual hash key was started");
@@ -80,7 +82,19 @@ pub fn update_mining_fee(value: usize) {
     if let Some(status) = MINING_FEE.get() {
         status.store(value, Ordering::SeqCst);
     } else {
-        panic!("Mining fee status not initialized");
+        panic!("Mining fee not initialized");
+    }
+}
+
+pub fn ts_diff() -> i64 {
+    TS_DIFF.get().expect("Timestamp diff not initialized").load(Ordering::SeqCst)
+}
+
+pub fn update_ts_diff(value: i64) {
+    if let Some(status) = TS_DIFF.get() {
+        status.store(value, Ordering::SeqCst);
+    } else {
+        panic!("Timestamp diff not initialized");
     }
 }
 
