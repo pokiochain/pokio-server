@@ -25,6 +25,8 @@ use serde_json::json;
 use serde_json::Value;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::collections::HashMap;
+use chrono::Local;
+
 
 use crate::constants::*;
 use crate::merkle::*;
@@ -206,7 +208,7 @@ pub fn decode_transaction(raw_tx_hex: &str) -> Result<Transaction> {
 	let adjusted_v = (v.as_u64() - (2 * chain_id + 35)) as u8;
 
 	if adjusted_v > 1 {
-		println!("Invalid adjusted `v` value: {}", adjusted_v);
+		print_log_message(format!("Invalid adjusted `v` value: {}", adjusted_v), 4);
 		return Err(anyhow!("Invalid adjusted v value"));
 	}
 
@@ -216,7 +218,7 @@ pub fn decode_transaction(raw_tx_hex: &str) -> Result<Transaction> {
 			Ok(tx)
 		},
 		Err(e) => {
-			println!("Error: {}", e);
+			print_log_message(format!("Error: {}", e), 4);
 			Err(anyhow!("Failed to recover sender address"))
 		}
 	}
@@ -298,10 +300,7 @@ pub fn fix_blockchain(last_valid_height: u64) -> Option<Block> {
 			}
 			let _ = db.insert("chain:latest_block", &last_valid_height.to_be_bytes())
 				.unwrap();
-			println!(
-				"Blockchain reordered, height: {}.",
-				last_valid_height
-			);
+			print_log_message(format!("Blockchain reordered, height: {}.", last_valid_height), 1);
 		}
 	}
 	None
@@ -333,7 +332,7 @@ pub fn get_16th_block() -> Option<Block> {
 						let prev_block: Block = bincode::deserialize(&prev_block_data).unwrap();
 
 						if prev_block.hash != block.prev_hash {
-							println!("Reordering blockchain from block...");
+							print_log_message(format!("Reordering blockchain from block..."), 1);
 							fix_blockchain(block.height - FIX_BC_OFFSET);
 							return None;
 						}
@@ -367,6 +366,14 @@ pub fn get_block_as_json(block_number: u64) -> Value {
 	json!(null)
 }
 
+pub fn print_log_message(message: String, level: u64) {
+    let actual_level = config::log_level();
+    if level <= actual_level {
+        let now = Local::now();
+        let timestamp = now.format("[%d %b %H:%M:%S]").to_string();
+        println!("{} {}", timestamp, message);
+    }
+}
 
 pub fn get_next_blocks(start_height: u64) -> Value {
 	let mut blocks = Vec::new();
@@ -410,33 +417,74 @@ pub fn get_receipt_info(txhash: &str) -> Option<(String, u64)> {
 pub fn get_last_nonce(address: &str) -> u64 {
 	let db = config::db();
 	let nonce_key = format!("count:{}", address.to_lowercase());
+	let mut mempool_nonce: EthersU256 = EthersU256::zero();
 
+    let db = config::mempooldb();
+    for result in db.iter() {
+        if let Ok((_, value)) = result {
+            if let Ok(raw_tx) = std::str::from_utf8(&value) {
+				let dtx = decode_transaction(&raw_tx);
+				match dtx {
+					Ok(decoded_tx) => {
+						let sender_address = format!("0x{}", hex::encode(decoded_tx.from));
+						if sender_address.to_lowercase() == address.to_lowercase() {
+							if mempool_nonce < decoded_tx.nonce {
+								mempool_nonce = decoded_tx.nonce;
+							}
+						}
+					},
+					Err(_) => {}
+				}
+            }
+        }
+    }
+	
+	let db_nonce: u64;
+	
 	if let Some(nonce_bytes) = db.get(&nonce_key).unwrap() {
 		let nonce_array: [u8; 32] = nonce_bytes.as_ref().try_into().unwrap();
 		let last_8_bytes = &nonce_array[24..];
 
-		u64::from_be_bytes(last_8_bytes.try_into().unwrap())
+		db_nonce = u64::from_be_bytes(last_8_bytes.try_into().unwrap())
 	} else {
-		0
+		db_nonce = 0;
+	}
+	
+	let f_mempool_nonce = mempool_nonce.as_u64();
+	
+	if f_mempool_nonce > db_nonce {
+		f_mempool_nonce
+	} else {
+		db_nonce
 	}
 }
 
 pub fn store_raw_transaction(raw_tx: String) -> String {
+	
+	let mempooldb = config::mempooldb();
+	let db = config::db();
+	
+	match get_rawtx_status(&raw_tx.clone()) {
+        Some(status) if status == "confirmed" => {
+			let _ = mempooldb.remove(&raw_tx.clone());
+            return String::from("");
+        }
+        _ => {}
+    }
+	
 	let dtx = decode_transaction(&raw_tx);
 	match dtx {
 		Ok(decoded_tx) => {
-			let mempooldb = config::mempooldb();
-			let db = config::db();
 			let raw_tx_str = raw_tx.to_string();
 			let sender_address = format!("0x{}", hex::encode(decoded_tx.from));
 			//let nonce_key = format!("count:{}", sender_address);
 			let last_nonce = get_last_nonce(&sender_address);
 			if decoded_tx.nonce < EthersU256::from(last_nonce + 1) {
-				//println!("Invalid nonce: {}, expected: {}", decoded_tx.nonce, last_nonce);
+				print_log_message(format!("Invalid nonce: {}, expected: {}", decoded_tx.nonce, last_nonce + 1), 4);
 				return String::from("");
-			} /*else {
-				println!("Valid nonce {}", decoded_tx.nonce);
-			}*/
+			} else {
+				print_log_message(format!("Valid nonce {}", decoded_tx.nonce), 3);
+			}
 			let _ = mempooldb.insert(raw_tx_str.clone(), IVec::from(raw_tx_str.as_bytes()))
 				.expect("Failed to store raw transaction in sled");
 			let mut nonce_bytes = [0u8; 32];
@@ -589,14 +637,22 @@ pub fn save_block_to_db(new_block: &mut Block) -> Result<(), Box<dyn Error>> {
 				}
 			}
 			
-			//println!("Block {} successfully saved in DB", new_block.height);
+			print_log_message(format!("Block {} successfully saved in DB", new_block.height), 3);
 			if new_block.height >= UNLOCK_OFFSET {
 				if let Some(block) = get_16th_block() {
 					let transactions: Vec<&str> = block.transactions.split('-').collect();
 
 					for tx_str in transactions {
-						if db.contains_key(tx_str)? {
-							continue;
+						match get_rawtx_status(tx_str.clone()) {
+							Some(status) if status == "processed" => {
+								let _ = db.insert(tx_str, b"confirmed")?;
+								continue;
+							}
+							Some(status) if status == "error" => {
+								let _ = db.insert(tx_str, b"confirmed_with_error")?;
+								continue;
+							}
+							_ => {}
 						}
 						let dtx = decode_transaction(tx_str);
 						
@@ -611,14 +667,14 @@ pub fn save_block_to_db(new_block: &mut Block) -> Result<(), Box<dyn Error>> {
 									
 								if tx.nonce > EthersU256::from(100_000_000u64) {
 									update_balance(&address, &amount, 0).expect("Error updating balance");
-									let _ = db.insert(tx_str, b"processed")?;
+									let _ = db.insert(tx_str, b"confirmed")?;
 								}
 								else {
 									if let Err(e) = update_balance(&sender_address, &total_deducted, 1) {
 										//eprintln!("Error in transaction: {}", e);
-										let _ = db.insert(tx_str, b"error")?;
+										let _ = db.insert(tx_str, b"confirmed_with_error")?;
 									} else {
-										let _ = db.insert(tx_str, b"processed")?;
+										let _ = db.insert(tx_str, b"confirmed")?;
 										update_balance(&address, &amount, 0)
 											.expect("Error updating balance");
 										/*let nonce_key = format!("count:{}", sender_address);
@@ -655,19 +711,25 @@ pub fn save_block_to_db(new_block: &mut Block) -> Result<(), Box<dyn Error>> {
 	result
 }
 
-pub fn get_mempool_records() -> serde_json::Value {
+pub fn get_mempool_records() -> Result<serde_json::Value, sled::Error> {
     let mut records = Vec::new();
-    let db = config::mempooldb();
+    let mempooldb = config::mempooldb();
+    let db = config::db();
 
-    for result in db.iter() {
+    for result in mempooldb.iter() {
         if let Ok((_, value)) = result {
             if let Ok(raw_tx) = std::str::from_utf8(&value) {
+                if db.contains_key(raw_tx)? {
+                    if let Err(e) = mempooldb.remove(&raw_tx) {
+                        eprintln!("Error deleting mempool entry: {:?}", e);
+                    }
+                    continue;
+                }
                 records.push(raw_tx.to_string());
             }
         }
     }
-
-    json!(records)
+    Ok(json!(records))
 }
 
 pub fn save_miner(miner: &str, id: &str) {

@@ -41,7 +41,7 @@ pub fn start_nng_server(ips: Vec<String>) {
 						if let Err(_e) = socket.send(message.as_bytes()) {
 							eprintln!("Error sending message");
 						} else {
-							println!("New block inserted: {}", message);
+							print_log_message(format!("New block inserted: {}", message), 1);
 						}
 
 						let block_key = format!("block:{:08}", actual_height);
@@ -79,7 +79,7 @@ pub fn start_nng_server(ips: Vec<String>) {
 									
 									tokio::spawn(async move {
 										let _ = client.post(&url).json(&payload).send().await;
-										println!("PUT Block to {}", url);
+										print_log_message(format!("PUT Block to {}", url), 1);
 									});
 									
 									/*tokio::spawn(async move {
@@ -122,7 +122,7 @@ pub fn start_nng_server(ips: Vec<String>) {
 										
 										tokio::spawn(async move {
 											let _ = client.post(&url).json(&payload).send().await;
-											println!("TX Sent to {}", url);
+											print_log_message(format!("TX Sent to {}", url), 1);
 										});
 
 										/*tokio::spawn(async move {
@@ -184,7 +184,7 @@ pub fn connect_to_nng_server(pserver: String) -> Result<(), Box<dyn std::error::
 			socket
 				.dial(&nng_url)
 				.expect("Can't connect to NNG server");
-			println!("Connected to {} NNG server", pserver);
+			print_log_message(format!("Connected to {} NNG server", pserver), 1);
 			let mut last_mempool_check = Instant::now();
 			loop {
 				if config::sync_status() == 0 {
@@ -205,8 +205,10 @@ pub fn connect_to_nng_server(pserver: String) -> Result<(), Box<dyn std::error::
 								if let Some(mempool_array) = json_response["result"].as_array() {
 									for raw_tx in mempool_array {
 										if let Some(raw_tx_str) = raw_tx.as_str() {
-											let _txres = store_raw_transaction(raw_tx_str.to_string());
-											//println!("tx {} stored in mempool", txres);
+											let txres = store_raw_transaction(raw_tx_str.to_string());
+											if txres != "" {
+												print_log_message(format!("TX {} stored in mempool", txres), 2);
+											}
 										}
 									}
 								}

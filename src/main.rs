@@ -24,7 +24,6 @@ use num_traits::Num;
 use rlp::RlpStream;
 use eyre::anyhow;
 use std::thread;
-use std::io::{self};
 use serde_json::Value;
 use num_traits::Zero;
 use std::cmp::max; 
@@ -37,6 +36,8 @@ use std::error::Error;
 use std::collections::HashMap;
 use std::env;
 use std::time::{Instant, Duration};
+use std::io::{self, BufRead};
+
 
 mod config;
 mod constants;
@@ -180,7 +181,7 @@ fn mine_block(coins: &str, miner: &str, nonce: &str) -> sled::Result<()> {
 			let txblock_key = format!("txblock:{}", block_hash.clone());
 			db.insert(txblock_key, transactions_hash_list.as_bytes())?;
 			
-			println!("Block found. Diff: {}, Hash: {}", mining_difficulty, block_hash.clone());
+			print_log_message(format!("Block found. Diff: {}, Hash: {}", mining_difficulty, block_hash.clone()), 1);
 			
 			new_block.hash = block_hash;
 			
@@ -210,9 +211,9 @@ async fn main() -> sled::Result<()> {
 	
 	config::load_key();
 	config::update_mining_fee(miningfee);
-	println!("Private key: {}", config::pkey());
-	println!("Address (hex): 0x{}", ethers::utils::hex::encode(config::address()));
-	println!("Mining fee set at: {}%", config::mining_fee());
+	print_log_message(format!("Private key: {}", config::pkey()), 1);
+	print_log_message(format!("Address (hex): 0x{}", ethers::utils::hex::encode(config::address())), 1);
+	print_log_message(format!("Mining fee set at: {}%", config::mining_fee()), 1);
 	
 	let response = reqwest::get("https://pokio.xyz/ts.php").await;
     if let Ok(resp) = response {
@@ -230,12 +231,12 @@ async fn main() -> sled::Result<()> {
             }
         }
     }
-	println!("Adjusted timestamp diff: {} seconds", config::ts_diff());
+	print_log_message(format!("Adjusted timestamp diff: {} seconds", config::ts_diff()), 1);
 	
 	set_latest_block_info();
-	println!("Chain started with height: {}, hash: {}", config::actual_height(), config::actual_hash());
+	print_log_message(format!("Chain started with height: {}, hash: {}", config::actual_height(), config::actual_hash()), 1);
 
-	println!("Starting NNG server...");
+	print_log_message(format!("Starting NNG server..."), 1);
 	start_nng_server(vec![
 		"62.113.200.176".to_string(),
 		"207.180.213.141".to_string()
@@ -248,6 +249,7 @@ async fn main() -> sled::Result<()> {
 	println!("  version     - Show server version");
 	println!("  miners      - Show active miners in the last 600 seconds");
 	println!("  lastblock   - Show details of the most recently mined block");
+	println!("  setloglevel - Set log level (1 to 4)");
 	println!("");
 
 	
@@ -256,40 +258,67 @@ async fn main() -> sled::Result<()> {
 		loop {
 			let mut input = String::new();
 			io::stdin().read_line(&mut input).unwrap();
-			if input.trim() == "version" {
-				println!("Pokio server 0.1.5");
+			let parts: Vec<&str> = input.trim().split_whitespace().collect();
+
+			if parts.is_empty() {
+				continue;
 			}
-			if input.trim() == "help" {
-				println!("Available commands:");
-				println!("  help        - Show this help message");
-				println!("  version     - Show server version");
-				println!("  miners      - Show active miners in the last 600 seconds");
-				println!("  lastblock   - Show details of the most recently mined block");
-			}
-			if input.trim() == "miners" {
-				println!("Miners in last 600 seconds:");
-				let seconds = 600;
-				let mut active_workers = 0;
-				let active_miners = count_active_miners(seconds);
-				println!("Total active miners: {}", active_miners.len());
-				for (_miner, workers) in &active_miners {
-					active_workers = active_workers + workers.len();
+
+			match parts[0] {
+				"version" => {
+					println!("Pokio server 0.1.5");
 				}
-				println!("Total active workers: {}", active_workers);
-			}
-			if input.trim() == "lastblock" {
-				println!("Last mined block:");
-				let (actual_height, actual_hash, actual_ts) = get_latest_block_info();
-				println!("Height: {}, Hash: {}, Timestamp: {}", actual_height, actual_hash, actual_ts);
+				"help" => {
+					println!("Available commands:");
+					println!("  help        - Show this help message");
+					println!("  version     - Show server version");
+					println!("  miners      - Show active miners in the last 600 seconds");
+					println!("  lastblock   - Show details of the most recently mined block");
+					println!("  setloglevel - Set log level (1 to 4)");
+				}
+				"miners" => {
+					println!("Miners in last 600 seconds:");
+					let seconds = 600;
+					let mut active_workers = 0;
+					let active_miners = count_active_miners(seconds);
+					println!("Total active miners: {}", active_miners.len());
+					for (_miner, workers) in &active_miners {
+						active_workers += workers.len();
+					}
+					println!("Total active workers: {}", active_workers);
+				}
+				"lastblock" => {
+					println!("Last mined block:");
+					let (actual_height, actual_hash, actual_ts) = get_latest_block_info();
+					println!("Height: {}, Hash: {}, Timestamp: {}", actual_height, actual_hash, actual_ts);
+				}
+				"setloglevel" => {
+					if parts.len() < 2 {
+						println!("Please specify a log level (1 to 4).");
+						continue;
+					}
+					match parts[1].parse::<u64>() {
+						Ok(level) if level >= 1 && level <= 4 => {
+							config::update_log_level(level);
+							println!("Log level set to {}", level);
+						}
+						_ => {
+							println!("Wrong log level value");
+						}
+					}
+				}
+				_ => {
+					println!("Unknown command. Type 'help' to see available commands.");
+				}
 			}
 		}
 	});
-	println!("Starting sync...");
+	print_log_message(format!("Starting sync..."), 1);
 	//-- sync at start
 	config::update_full_sync(1);
 	let _ = tokio::spawn(full_sync_blocks()).await.unwrap();
 	config::update_full_sync(0);
-	println!("Sync ended. Starting server...");
+	print_log_message(format!("Sync ended. Starting server..."), 1);
 
 	//-- nng connect
 	tokio::spawn(async {
@@ -318,8 +347,21 @@ async fn main() -> sled::Result<()> {
 					json!({"jsonrpc": "2.0", "id": id, "result": blocks})
 				},
 				"pokio_getMempool" => {
-					let mempool = get_mempool_records();
-					json!({"jsonrpc": "2.0", "id": id, "result": mempool})
+					match get_mempool_records() {
+						Ok(mempool) => {
+							json!({"jsonrpc": "2.0", "id": id, "result": mempool})
+						},
+						Err(e) => {
+							json!({
+								"jsonrpc": "2.0",
+								"id": id,
+								"error": {
+									"code": -32000,
+									"message": format!("Error getting mempool records: {}", e)
+								}
+							})
+						}
+					}
 				},
 				//get_mempool_records
 				"eth_chainId" => json!({"jsonrpc": "2.0", "id": id, "result": format!("0x{:x}", CHAIN_ID)}),
@@ -332,7 +374,7 @@ async fn main() -> sled::Result<()> {
 						.and_then(|v| v.as_str())
 						.unwrap_or("");
 					let last_nonce = get_last_nonce(&address) + 1;
-					//println!("last nonce: {}", last_nonce);
+					print_log_message(format!("Last nonce for {}: {}", address, last_nonce), 2);
 					let hex_nonce = format!("0x{:x}", last_nonce);
 					json!({"jsonrpc": "2.0", "id": id, "result": hex_nonce })
 				}
@@ -346,9 +388,9 @@ async fn main() -> sled::Result<()> {
 					if let Some(params) = data["params"].as_array() {
 						if let Some(raw_tx) = params.get(0) {
 							if let Some(raw_tx_str) = raw_tx.as_str() {
-								//println!("Get rawtx: {}", raw_tx_str);
+								print_log_message(format!("Get rawtx: {}", raw_tx_str), 2);
 								txhash = store_raw_transaction(raw_tx_str.to_string());
-								//println!("{}", txhash);
+								print_log_message(format!("TX hash{}", txhash), 2);
 							}
 						}
 					}
@@ -413,10 +455,10 @@ async fn main() -> sled::Result<()> {
 						.get(0)
 						.and_then(|v| v.as_str())
 						.unwrap_or("");
-					//println!("Ask receipt: {}", txhash);
+					print_log_message(format!("Ask receipt: {}", txhash), 2);
 					if let Some((_receipt, block)) = get_receipt_info(txhash) {
 						let block_json = get_block_as_json(block);
-						//println!("Block sent: {}", block_json);
+						print_log_message(format!("Block sent: {}", block_json), 3);
 						let hexblock = format!("0x{:x}", block);						
 						json!({"jsonrpc": "2.0", "id": id, "result": { "blockHash" : block_json.get("hash"), "blockNumber" : hexblock,
 							"contractAddress" : null, "cumulativeGasUsed" : "0x0", "effectiveGasPrice" : "0x0", "from" : "", "gasUsed" : "0x0",
@@ -449,7 +491,7 @@ async fn main() -> sled::Result<()> {
 					}
 				},
 				_ => {
-					//println!("Received JSON: {}", data);
+					print_log_message(format!("Received JSON: {}", data), 3);
 					json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32600, "message": "The method does not exist/is not available"}})
 				}
 			};
@@ -475,10 +517,6 @@ async fn main() -> sled::Result<()> {
 				"getMinersCount" => {
 					let seconds = 600;
 					let active_miners = count_active_miners(seconds);
-					//println!("Total active miners: {}", active_miners.len());
-					/*for (miner, workers) in &active_miners {
-						println!("Miner: {} - Workers: {:?}", miner, workers);
-					}*/
 					json!({"jsonrpc": "2.0", "id": id, "result": active_miners.len()})
 				},
 				"submitBlock" => {
@@ -514,7 +552,7 @@ async fn main() -> sled::Result<()> {
 										signature: block_json.get("signature").and_then(|v| v.as_str()).map_or_else(|| "".to_string(), String::from),
 									};
 									
-									println!("New block received: {:?}", new_block.height);
+									print_log_message(format!("New block received: {:?}", new_block.height), 1);
 									
 									if let Err(e) = save_block_to_db(&mut new_block) {
 										eprintln!("Error saving block: {}", e);
@@ -588,7 +626,7 @@ async fn full_sync_blocks() -> Result<(), Box<dyn std::error::Error + Send + Syn
 				}
 			}
 			(actual_height, _actual_hash, _) = get_latest_block_info();
-			println!("Block {} synced...", actual_height);
+			print_log_message(format!("Block {} synced...", actual_height), 1);
 		}
 		break;
 	}

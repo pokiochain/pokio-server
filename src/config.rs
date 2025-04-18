@@ -18,6 +18,7 @@ static MINING_FEE: OnceLock<AtomicUsize> = OnceLock::new();
 static ACTUAL_HEIGHT: OnceLock<AtomicU64> = OnceLock::new();
 static ACTUAL_HASH: OnceLock<Mutex<String>> = OnceLock::new();
 static ACTUAL_TIMESTAMP: OnceLock<AtomicU64> = OnceLock::new();
+static LOG_LEVEL: OnceLock<AtomicU64> = OnceLock::new();
 
 #[derive(Deserialize)]
 struct KeyFile {
@@ -52,6 +53,8 @@ pub fn load_key() {
 	ACTUAL_HEIGHT.set(AtomicU64::new(0)).expect("Actual height already initialized");
 	ACTUAL_HASH.set(Mutex::new("0000000000000000000000000000000000000000000000000000000000000000".to_string())).expect("Actual hash key was started");
 	ACTUAL_TIMESTAMP.set(AtomicU64::new(0)).expect("Actual timestamp already initialized");
+	
+	LOG_LEVEL.set(AtomicU64::new(1)).expect("Actual height already initialized");
 }
 
 pub fn pkey() -> &'static str {
@@ -119,6 +122,18 @@ pub fn update_full_sync(value: usize) {
         status.store(value, Ordering::SeqCst);
     } else {
         panic!("Sync status not initialized");
+    }
+}
+
+pub fn log_level() -> u64 {
+    LOG_LEVEL.get().expect("Actual height not initialized").load(Ordering::SeqCst)
+}
+
+pub fn update_log_level(value: u64) {
+    if let Some(status) = LOG_LEVEL.get() {
+        status.store(value, Ordering::SeqCst);
+    } else {
+        panic!("Actual height not initialized");
     }
 }
 
