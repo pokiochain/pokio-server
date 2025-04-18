@@ -3,7 +3,7 @@ use ethers::types::Address;
 use serde::Deserialize;
 use std::fs;
 use std::str::FromStr;
-use std::sync::{Mutex, OnceLock, atomic::{AtomicI64, AtomicUsize, Ordering}};
+use std::sync::{Mutex, OnceLock, atomic::{AtomicI64, AtomicU64, AtomicUsize, Ordering}};
 use sled;
 
 static PKEY: OnceLock<String> = OnceLock::new();
@@ -15,9 +15,9 @@ static SYNC_STATUS: OnceLock<AtomicUsize> = OnceLock::new();
 static FULL_SYNC_STATUS: OnceLock<AtomicUsize> = OnceLock::new();
 static TS_DIFF: OnceLock<AtomicI64> = OnceLock::new();
 static MINING_FEE: OnceLock<AtomicUsize> = OnceLock::new();
-static ACTUAL_HEIGHT: OnceLock<AtomicUsize> = OnceLock::new();
+static ACTUAL_HEIGHT: OnceLock<AtomicU64> = OnceLock::new();
 static ACTUAL_HASH: OnceLock<Mutex<String>> = OnceLock::new();
-static ACTUAL_TIMESTAMP: OnceLock<AtomicUsize> = OnceLock::new();
+static ACTUAL_TIMESTAMP: OnceLock<AtomicU64> = OnceLock::new();
 
 #[derive(Deserialize)]
 struct KeyFile {
@@ -49,9 +49,9 @@ pub fn load_key() {
 	MINING_FEE.set(AtomicUsize::new(3)).expect("Mining fee status already initialized");
 	TS_DIFF.set(AtomicI64::new(0)).expect("Timestamp diff status already initialized");
 	
-	ACTUAL_HEIGHT.set(AtomicUsize::new(0)).expect("Actual height already initialized");
+	ACTUAL_HEIGHT.set(AtomicU64::new(0)).expect("Actual height already initialized");
 	ACTUAL_HASH.set(Mutex::new("0000000000000000000000000000000000000000000000000000000000000000".to_string())).expect("Actual hash key was started");
-	ACTUAL_TIMESTAMP.set(AtomicUsize::new(0)).expect("Actual timestamp already initialized");
+	ACTUAL_TIMESTAMP.set(AtomicU64::new(0)).expect("Actual timestamp already initialized");
 }
 
 pub fn pkey() -> &'static str {
@@ -122,11 +122,11 @@ pub fn update_full_sync(value: usize) {
     }
 }
 
-pub fn actual_height() -> usize {
+pub fn actual_height() -> u64 {
     ACTUAL_HEIGHT.get().expect("Actual height not initialized").load(Ordering::SeqCst)
 }
 
-pub fn update_actual_height(value: usize) {
+pub fn update_actual_height(value: u64) {
     if let Some(status) = ACTUAL_HEIGHT.get() {
         status.store(value, Ordering::SeqCst);
     } else {
@@ -152,11 +152,11 @@ pub fn actual_hash() -> String {
         .clone()
 }
 
-pub fn actual_timestamp() -> usize {
+pub fn actual_timestamp() -> u64 {
     ACTUAL_TIMESTAMP.get().expect("Actual timestamp not initialized").load(Ordering::SeqCst)
 }
 
-pub fn update_actual_timestamp(value: usize) {
+pub fn update_actual_timestamp(value: u64) {
     if let Some(status) = ACTUAL_TIMESTAMP.get() {
         status.store(value, Ordering::SeqCst);
     } else {
