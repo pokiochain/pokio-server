@@ -163,7 +163,7 @@ pub fn start_nng_server(ips: Vec<String>) {
 						}
 					}
 				}
-				tokio::time::sleep(Duration::from_millis(50)).await;
+				tokio::time::sleep(Duration::from_millis(25)).await;
 			}
 		});
 	});
@@ -244,7 +244,7 @@ pub fn connect_to_nng_server(pserver: String) -> Result<(), Box<dyn std::error::
 								}
 							};
 							while config::sync_status() == 1 {
-								std::thread::sleep(std::time::Duration::from_millis(50));
+								std::thread::sleep(std::time::Duration::from_millis(10));
 							}
 							
 							if let Some(blocks_array) = blocks_json["result"].as_array() {
@@ -281,7 +281,7 @@ pub fn connect_to_nng_server(pserver: String) -> Result<(), Box<dyn std::error::
 						}
 					}
 				}
-				thread::sleep(Duration::from_millis(50));
+				thread::sleep(Duration::from_millis(25));
 				
 			}
 		});
