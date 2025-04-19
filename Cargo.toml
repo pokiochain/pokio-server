@@ -34,3 +34,4 @@ sha3 = "0.10"
 anyhow = "1.0.96"
 nng = "1.0"
 reqwest = { version = "0.11", features = ["blocking", "json"] }
+openssl = { version = "0.10", features = ["vendored"] }
