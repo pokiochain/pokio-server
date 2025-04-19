@@ -126,10 +126,10 @@ fn mine_block(coins: &str, miner: &str, nonce: &str) -> sled::Result<()> {
 						let dtx = decode_transaction(&tx_str);
 						match dtx {
 							Ok(tx) => {
-								let address = tx.to.map(|addr| format!("{:?}", addr)).unwrap_or("None".to_string());
+								//let address = tx.to.map(|addr| format!("{:?}", addr)).unwrap_or("None".to_string());
 								let sender_address = format!("0x{}", hex::encode(tx.from));
-								let amount = tx.value.clone().to_string();
-								let txhash = keccak256(&tx_str); //format!("0x{}", ethers::utils::hex::encode(tx.hash.to_string()));
+								//let amount = tx.value.clone().to_string();
+								//let txhash = keccak256(&tx_str); //format!("0x{}", ethers::utils::hex::encode(tx.hash.to_string()));
 								let last_nonce = get_last_nonce(&sender_address, 0);
 								if tx.nonce == EthersU256::from(last_nonce + 1) {
 									/*if transactions_hash_list.clone() == "" {
