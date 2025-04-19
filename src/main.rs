@@ -130,40 +130,23 @@ fn mine_block(coins: &str, miner: &str, nonce: &str) -> sled::Result<()> {
 								let sender_address = format!("0x{}", hex::encode(tx.from));
 								let amount = tx.value.clone().to_string();
 								let txhash = keccak256(&tx_str); //format!("0x{}", ethers::utils::hex::encode(tx.hash.to_string()));
-								let fee = tx.gas * tx.gas_price.unwrap_or(EthersU256::zero());
-								let total_deducted = (tx.value + fee).to_string();
-								if let Err(e) = update_balance(&sender_address, &total_deducted, 1) {
-									//eprintln!("Error in transaction: {}", e);
-									let _ = db.insert(tx_value_str.clone(), b"error")?;
-								} else {
-									let _ = db.insert(tx_value_str.clone(), b"processed")?;
-									update_balance(&address, &amount, 0)
-										.expect("Error updating balance");
-								}
-								
-								let receipt_key = format!("receipt:{}", txhash.clone());
-								db.insert(receipt_key, tx_value_str.clone().as_bytes())?;
-								
-								let (ah, _, _) = get_latest_block_info();
-								let txheight = ah + 1;
-								let receipt_key = format!("receiptblock:{}", txhash.clone());
-								db.insert(receipt_key, &txheight.to_be_bytes())?;
-								
-								if transactions_hash_list.clone() == "" {
-									transactions_hash_list = format!("{}", txhash.clone());
-								} else {
-									transactions_hash_list = format!("{}-{}", transactions_hash_list, txhash.clone());
+								let last_nonce = get_last_nonce(&sender_address, 0);
+								if tx.nonce == EthersU256::from(last_nonce + 1) {
+									/*if transactions_hash_list.clone() == "" {
+										transactions_hash_list = format!("{}", txhash.clone());
+									} else {
+										transactions_hash_list = format!("{}-{}", transactions_hash_list, txhash.clone());
+									}*/
+									transactions_list = format!("{}-{}", transactions_list, tx_value_str);
+									/*if let Err(e) = mempooldb.remove(&key) {
+										eprintln!("Error deleting mempool entry: {:?}", e);
+									}*/
 								}
 							}
 							Err(e) => {
 								eprintln!("Error processing tx: {:?}", e);
 							}
 						}
-						
-						transactions_list = format!("{}-{}", transactions_list, tx_value_str);
-						/*if let Err(e) = mempooldb.remove(&key) {
-							eprintln!("Error deleting mempool entry: {:?}", e);
-						}*/
 					}
 					Err(e) => {
 						eprintln!("Error reading mempool entry: {:?}", e);
@@ -373,7 +356,7 @@ async fn main() -> sled::Result<()> {
 						.get(0)
 						.and_then(|v| v.as_str())
 						.unwrap_or("");
-					let last_nonce = get_last_nonce(&address) + 1;
+					let last_nonce = get_last_nonce(&address, 1) + 1;
 					print_log_message(format!("Last nonce for {}: {}", address, last_nonce), 2);
 					let hex_nonce = format!("0x{:x}", last_nonce);
 					json!({"jsonrpc": "2.0", "id": id, "result": hex_nonce })

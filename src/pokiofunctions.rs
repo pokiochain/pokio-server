@@ -414,31 +414,32 @@ pub fn get_receipt_info(txhash: &str) -> Option<(String, u64)> {
 	Some((actual_hash, actual_height - 1))
 }
 
-pub fn get_last_nonce(address: &str) -> u64 {
+pub fn get_last_nonce(address: &str, checkpool: u64) -> u64 {
 	let db = config::db();
 	let nonce_key = format!("count:{}", address.to_lowercase());
 	let mut mempool_nonce: EthersU256 = EthersU256::zero();
-
-    let db = config::mempooldb();
-    for result in db.iter() {
-        if let Ok((_, value)) = result {
-            if let Ok(raw_tx) = std::str::from_utf8(&value) {
-				let dtx = decode_transaction(&raw_tx);
-				match dtx {
-					Ok(decoded_tx) => {
-						let sender_address = format!("0x{}", hex::encode(decoded_tx.from));
-						if sender_address.to_lowercase() == address.to_lowercase() {
-							if mempool_nonce < decoded_tx.nonce {
-								mempool_nonce = decoded_tx.nonce;
+	if checkpool == 1
+	{
+		let mempooldb = config::mempooldb();
+		for result in mempooldb.iter() {
+			if let Ok((_, value)) = result {
+				if let Ok(raw_tx) = std::str::from_utf8(&value) {
+					let dtx = decode_transaction(&raw_tx);
+					match dtx {
+						Ok(decoded_tx) => {
+							let sender_address = format!("0x{}", hex::encode(decoded_tx.from));
+							if sender_address.to_lowercase() == address.to_lowercase() {
+								if mempool_nonce < decoded_tx.nonce {
+									mempool_nonce = decoded_tx.nonce;
+								}
 							}
-						}
-					},
-					Err(_) => {}
+						},
+						Err(_) => {}
+					}
 				}
-            }
-        }
-    }
-	
+			}
+		}
+	}
 	let db_nonce: u64;
 	
 	if let Some(nonce_bytes) = db.get(&nonce_key).unwrap() {
@@ -453,8 +454,10 @@ pub fn get_last_nonce(address: &str) -> u64 {
 	let f_mempool_nonce = mempool_nonce.as_u64();
 	
 	if f_mempool_nonce > db_nonce {
+		print_log_message(format!("mempoolnonce: {}", f_mempool_nonce), 2);
 		f_mempool_nonce
 	} else {
+		print_log_message(format!("dbnonce: {}", db_nonce), 2);
 		db_nonce
 	}
 }
@@ -478,7 +481,7 @@ pub fn store_raw_transaction(raw_tx: String) -> String {
 			let raw_tx_str = raw_tx.to_string();
 			let sender_address = format!("0x{}", hex::encode(decoded_tx.from));
 			//let nonce_key = format!("count:{}", sender_address);
-			let last_nonce = get_last_nonce(&sender_address);
+			let last_nonce = get_last_nonce(&sender_address, 1);
 			if decoded_tx.nonce < EthersU256::from(last_nonce + 1) {
 				print_log_message(format!("Invalid nonce: {}, expected: {}", decoded_tx.nonce, last_nonce + 1), 4);
 				return String::from("");
@@ -609,26 +612,66 @@ pub fn save_block_to_db(new_block: &mut Block) -> Result<(), Box<dyn Error>> {
 						let fee = tx.gas * tx.gas_price.unwrap_or(EthersU256::zero());
 						let total_deducted = (tx.value + fee).to_string();
 						if tx.nonce < EthersU256::from(100_000_000u64) {
-							if let Err(e) = update_balance(&sender_address, &total_deducted, 1) {
-								//eprintln!("Error in transaction: {}", e);
-								let _ = db.insert(tx_str, b"error")?;
+							let last_nonce = get_last_nonce(&sender_address, 0);
+							if new_block.height > UPDATE_2_HEIGHT {
+								if tx.nonce == EthersU256::from(last_nonce + 1) {
+									if let Err(e) = update_balance(&sender_address, &total_deducted, 1) {
+										//eprintln!("Error in transaction: {}", e);
+										let _ = db.insert(tx_str, b"error")?;
+									} else {
+										let _ = db.insert(tx_str, b"processed")?;
+										update_balance(&address, &amount, 0)
+											.expect("Error updating balance");
+									}
+									
+									
+									if tx.nonce > EthersU256::from(last_nonce) {
+										print_log_message(format!("Valid nonce {}", tx.nonce), 4);
+										let nonce_key = format!("count:{}", sender_address.to_lowercase());
+										print_log_message(format!("Nonce updated {}, {}", tx.nonce, nonce_key), 2);
+										let mut nonce_bytes = [0u8; 32];
+										tx.nonce.to_big_endian(&mut nonce_bytes);
+										let _ = db.insert(nonce_key.clone(), IVec::from(&nonce_bytes[..]))
+											.expect("Failed to store nonce in sled");
+									} else {
+										print_log_message(format!("Invalid nonce: {}, expected: {}", tx.nonce, last_nonce + 1), 2);
+									}
+									let receipt_key = format!("receipt:{}", txhash.clone());
+									db.insert(receipt_key, tx_str.clone().as_bytes())?;
+										
+									let (ah, _, _) = get_latest_block_info();
+									let txheight = ah + 1;
+									let receipt_key = format!("receiptblock:{}", txhash.clone());
+									db.insert(receipt_key, &txheight.to_be_bytes())?;
+								}
 							} else {
-								let _ = db.insert(tx_str, b"processed")?;
-								update_balance(&address, &amount, 0)
-									.expect("Error updating balance");
-								let nonce_key = format!("count:{}", sender_address.to_lowercase());
-								let mut nonce_bytes = [0u8; 32];
-								tx.nonce.to_big_endian(&mut nonce_bytes);
-								let _ = db.insert(nonce_key.clone(), IVec::from(&nonce_bytes[..]))
-									.expect("Failed to store nonce in sled");
-							}
-							let receipt_key = format!("receipt:{}", txhash.clone());
-							db.insert(receipt_key, tx_str.clone().as_bytes())?;
-								
-							let (ah, _, _) = get_latest_block_info();
-							let txheight = ah + 1;
-							let receipt_key = format!("receiptblock:{}", txhash.clone());
-							db.insert(receipt_key, &txheight.to_be_bytes())?;							
+								if let Err(e) = update_balance(&sender_address, &total_deducted, 1) {
+									//eprintln!("Error in transaction: {}", e);
+									let _ = db.insert(tx_str, b"error")?;
+								} else {
+									let _ = db.insert(tx_str, b"processed")?;
+									update_balance(&address, &amount, 0)
+										.expect("Error updating balance");
+								}
+								if tx.nonce > EthersU256::from(last_nonce) {
+									print_log_message(format!("Valid nonce {}", tx.nonce), 4);
+									let nonce_key = format!("count:{}", sender_address.to_lowercase());
+									print_log_message(format!("Nonce updated {}, {}", tx.nonce, nonce_key), 2);
+									let mut nonce_bytes = [0u8; 32];
+									tx.nonce.to_big_endian(&mut nonce_bytes);
+									let _ = db.insert(nonce_key.clone(), IVec::from(&nonce_bytes[..]))
+										.expect("Failed to store nonce in sled");
+								} else {
+									print_log_message(format!("Invalid nonce: {}, expected: {}", tx.nonce, last_nonce + 1), 2);
+								}
+								let receipt_key = format!("receipt:{}", txhash.clone());
+								db.insert(receipt_key, tx_str.clone().as_bytes())?;
+									
+								let (ah, _, _) = get_latest_block_info();
+								let txheight = ah + 1;
+								let receipt_key = format!("receiptblock:{}", txhash.clone());
+								db.insert(receipt_key, &txheight.to_be_bytes())?;
+							}						
 						}
 					}
 					Err(e) => {
