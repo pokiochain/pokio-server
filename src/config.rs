@@ -3,7 +3,7 @@ use ethers::types::Address;
 use serde::Deserialize;
 use std::fs;
 use std::str::FromStr;
-use std::sync::{Mutex, OnceLock, atomic::{AtomicI64, AtomicU64, AtomicUsize, Ordering}};
+use std::sync::{Mutex, OnceLock, atomic::{AtomicI64, AtomicU64, AtomicU8, AtomicUsize, Ordering}};
 use sled;
 
 static PKEY: OnceLock<String> = OnceLock::new();
@@ -19,6 +19,7 @@ static ACTUAL_HEIGHT: OnceLock<AtomicU64> = OnceLock::new();
 static ACTUAL_HASH: OnceLock<Mutex<String>> = OnceLock::new();
 static ACTUAL_TIMESTAMP: OnceLock<AtomicU64> = OnceLock::new();
 static LOG_LEVEL: OnceLock<AtomicU64> = OnceLock::new();
+static ASYNC: OnceLock<AtomicU8> = OnceLock::new();
 
 #[derive(Deserialize)]
 struct KeyFile {
@@ -55,6 +56,7 @@ pub fn load_key() {
 	ACTUAL_TIMESTAMP.set(AtomicU64::new(0)).expect("Actual timestamp already initialized");
 	
 	LOG_LEVEL.set(AtomicU64::new(1)).expect("Actual height already initialized");
+	ASYNC.set(AtomicU8::new(1)).expect("Async status already initialized");
 }
 
 pub fn pkey() -> &'static str {
@@ -122,6 +124,18 @@ pub fn update_full_sync(value: usize) {
         status.store(value, Ordering::SeqCst);
     } else {
         panic!("Sync status not initialized");
+    }
+}
+
+pub fn async_status() -> u8 {
+    ASYNC.get().expect("Actual height not initialized").load(Ordering::SeqCst)
+}
+
+pub fn update_async(value: u8) {
+    if let Some(status) = ASYNC.get() {
+        status.store(value, Ordering::SeqCst);
+    } else {
+        panic!("Actual height not initialized");
     }
 }
 

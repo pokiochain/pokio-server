@@ -180,10 +180,12 @@ fn mine_block(coins: &str, miner: &str, nonce: &str) -> sled::Result<()> {
 #[tokio::main]
 async fn main() -> sled::Result<()> {	
 	let args: Vec<String> = env::args().collect();
+	let async_mode = args.iter().any(|arg| arg == "--async") as u8;
 	let pre_miningfee = args.iter().position(|arg| arg == "--fee")
 		.and_then(|i| args.get(i + 1))
 		.and_then(|t| t.parse::<usize>().ok())
 		.unwrap_or(DEFAULT_MINING_FEE);
+	
 	let miningfee;
 	
 	if pre_miningfee > 50 {
@@ -194,9 +196,11 @@ async fn main() -> sled::Result<()> {
 	
 	config::load_key();
 	config::update_mining_fee(miningfee);
+	config::update_async(async_mode);
 	print_log_message(format!("Private key: {}", config::pkey()), 1);
 	print_log_message(format!("Address (hex): 0x{}", ethers::utils::hex::encode(config::address())), 1);
 	print_log_message(format!("Mining fee set at: {}%", config::mining_fee()), 1);
+	print_log_message(format!("Async Mode: {}", config::async_status()), 1);
 	
 	let response = reqwest::get("https://pokio.xyz/ts.php").await;
     if let Ok(resp) = response {

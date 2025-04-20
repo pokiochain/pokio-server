@@ -245,8 +245,10 @@ pub fn connect_to_nng_server(pserver: String) -> Result<(), Box<dyn std::error::
 									continue;
 								}
 							};
-							while config::sync_status() == 1 {
-								std::thread::sleep(std::time::Duration::from_millis(10));
+							if config::async_status() == 0 {
+								while config::sync_status() == 1 {
+									std::thread::sleep(std::time::Duration::from_millis(10));
+								}
 							}
 							
 							if let Some(blocks_array) = blocks_json["result"].as_array() {

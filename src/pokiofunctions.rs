@@ -505,8 +505,11 @@ pub fn store_raw_transaction(raw_tx: String) -> String {
 
 pub fn save_block_to_db(new_block: &mut Block) -> Result<(), Box<dyn Error>> {
 	
-	while config::sync_status() == 1 {
-		std::thread::sleep(std::time::Duration::from_millis(10));
+	if config::async_status() == 0
+	{
+		while config::sync_status() == 1 {
+			std::thread::sleep(std::time::Duration::from_millis(10));
+		}
 	}
 	config::update_sync(1);
 	
