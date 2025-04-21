@@ -273,7 +273,7 @@ pub fn connect_to_nng_server(pserver: String) -> Result<(), Box<dyn std::error::
 										signature: block.get("signature").and_then(|v| v.as_str()).map_or_else(|| "".to_string(), String::from),
 									};
 									
-									if let Err(e) = save_block_to_db(&mut new_block) {
+									if let Err(e) = save_block_to_db(&mut new_block, 1) {
 										eprintln!("Error saving block: {}", e);
 									}
 								}
@@ -286,6 +286,163 @@ pub fn connect_to_nng_server(pserver: String) -> Result<(), Box<dyn std::error::
 					}
 				}
 				thread::sleep(Duration::from_millis(25));
+				
+			}
+		});
+	});
+
+	Ok(())
+}
+
+pub fn connect_to_http_server(pserver: String) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+	let client = Client::new();
+	let db = config::db();
+	let mempooldb = config::mempooldb();
+
+			print_log_message(format!("Connected to {} HTTP server", pserver), 1);
+	thread::spawn(move || {
+		let rt = tokio::runtime::Runtime::new().unwrap();
+		rt.block_on(async move {
+			let mut last_mempool_check = Instant::now();
+			loop {
+				if config::sync_status() == 0 {
+					if last_mempool_check.elapsed() >= Duration::from_secs(5) {
+						last_mempool_check = Instant::now();
+						let rpc_url = format!("http://{}:30303/rpc", pserver);
+						if let Ok(response) = client
+							.post(rpc_url)
+							.json(&json!({
+								"jsonrpc": "2.0",
+								"id": 1,
+								"method": "pokio_getMempool",
+								"params": []
+							}))
+							.send()
+							.await
+						{
+							if let Ok(json_response) = response.json::<serde_json::Value>().await {
+								if let Some(mempool_array) = json_response["result"].as_array() {
+									for raw_tx in mempool_array {
+										if let Some(raw_tx_str) = raw_tx.as_str() {
+											let txres = store_raw_transaction(raw_tx_str.to_string());
+											if txres != "" {
+												print_log_message(format!("TX {} stored in mempool", txres), 2);
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+					
+					let (actual_height, _actual_hash, _) = get_latest_block_info();
+					let x_rpc_url = format!("http://{}:30303/rpc", pserver);
+					let blocks_response = match client
+						.post(x_rpc_url)
+						.json(&json!({
+							"jsonrpc": "2.0",
+							"id": 1,
+							"method": "pokio_getBlocks",
+							"params": [(actual_height + 1).to_string()]
+						}))
+						.send()
+						.await
+					{
+						Ok(response) => response,
+						Err(e) => {
+							eprintln!("Error fetching blocks: {:?}", e);
+							continue;
+						}
+					};
+
+					let blocks_json: serde_json::Value = match blocks_response.json().await {
+						Ok(json) => json,
+						Err(e) => {
+							eprintln!("Error parsing blocks response: {:?}", e);
+							continue;
+						}
+					};
+					if config::async_status() == 0 {
+						while config::sync_status() == 1 {
+							std::thread::sleep(std::time::Duration::from_millis(10));
+						}
+					}
+							
+					if let Some(blocks_array) = blocks_json["result"].as_array() {
+						for block in blocks_array {
+							let mut new_block = Block {
+								height: block.get("height").and_then(|v| v.as_u64()).expect("Missing height"),
+								hash: block.get("hash").and_then(|v| v.as_str()).map_or_else(|| "".to_string(), String::from),
+								prev_hash: block.get("prev_hash").and_then(|v| v.as_str()).map_or_else(|| "".to_string(), String::from),
+								timestamp: block.get("timestamp").and_then(|v| v.as_u64()).expect("Missing timestamp"),
+								nonce: block.get("nonce").and_then(|v| v.as_str()).map_or_else(|| "0000000000000000".to_string(), String::from),
+								transactions: block.get("transactions").and_then(|v| v.as_str()).map_or_else(|| "".to_string(), String::from),
+								gas_limit: block.get("gas_limit").and_then(|v| v.as_u64()).expect("Missing gas_limit"),
+								gas_used: block.get("gas_used").and_then(|v| v.as_u64()).expect("Missing gas_used"),
+								miner: block.get("miner").and_then(|v| v.as_str()).map_or_else(|| "".to_string(), String::from),
+								difficulty: block.get("difficulty").and_then(|v| v.as_u64()).expect("Missing difficulty"),
+								block_reward: block.get("block_reward").and_then(|v| v.as_u64()).expect("Missing block_reward"),
+								state_root: block.get("state_root").and_then(|v| v.as_str()).map_or_else(|| "".to_string(), String::from),
+								receipts_root: block.get("receipts_root").and_then(|v| v.as_str()).map_or_else(|| "".to_string(), String::from),
+								logs_bloom: block.get("logs_bloom").and_then(|v| v.as_str()).map_or_else(|| "".to_string(), String::from),
+								extra_data: block.get("extra_data").and_then(|v| v.as_str()).map_or_else(|| "".to_string(), String::from),
+								version: block.get("version").and_then(|v| v.as_u64()).map(|v| v as u32).expect("Missing version"),
+								signature: block.get("signature").and_then(|v| v.as_str()).map_or_else(|| "".to_string(), String::from),
+							};
+							
+							if let Err(e) = save_block_to_db(&mut new_block, 1) {
+								eprintln!("Error saving block: {}", e);
+							}
+						}
+					}
+				}
+				
+				thread::sleep(Duration::from_millis(3000));
+				
+				let (actual_height, block_hash, _) = get_latest_block_info();
+				let x_rpc_url = format!("http://{}:30303/rpc", pserver);
+				let request_body = json!({
+					"jsonrpc": "2.0",
+					"id": 1,
+					"method": "eth_getBlockByNumber",
+					"params": [
+						format!("0x{:x}", actual_height),
+						false
+					]
+				});
+
+				let response = match client
+					.post(x_rpc_url)
+					.json(&request_body)
+					.send()
+					.await
+				{
+					Ok(res) => res,
+					Err(e) => {
+						eprintln!("Error sending request: {:?}", e);
+						continue;
+					}
+				};
+
+				let block_json: serde_json::Value = match response.json().await {
+					Ok(json) => json,
+					Err(e) => {
+						eprintln!("Error processing request: {:?}", e);
+						continue;
+					}
+				};
+
+				if let Some(hash) = block_json.get("result").and_then(|r| r.get("hash")).and_then(|h| h.as_str()) {
+					if block_hash == hash {
+						print_log_message(format!("Blockchain status: clean"), 4);
+					} else {
+						print_log_message(format!("Hash error on block {}: {} != {}", actual_height, hash, block_hash), 1);
+						fix_blockchain(actual_height - (FIX_BC_OFFSET * 10));
+					}
+				} /*else {
+					print_log_message(format!("Hash error on block {}.", actual_height), 2);
+					//fix_blockchain(actual_height - (FIX_BC_OFFSET * 10));
+				}*/
 				
 			}
 		});

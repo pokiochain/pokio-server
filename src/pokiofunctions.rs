@@ -503,7 +503,7 @@ pub fn store_raw_transaction(raw_tx: String) -> String {
 	}
 }
 
-pub fn save_block_to_db(new_block: &mut Block) -> Result<(), Box<dyn Error>> {
+pub fn save_block_to_db(new_block: &mut Block, checkpoint: u8) -> Result<(), Box<dyn Error>> {
 	
 	if config::async_status() == 0
 	{
@@ -522,68 +522,71 @@ pub fn save_block_to_db(new_block: &mut Block) -> Result<(), Box<dyn Error>> {
 		
 		if expected_height == new_block.height && prev_hash == new_block.prev_hash {
 			
-			if new_block.height > UPDATE_2_HEIGHT && new_block.timestamp < ts {
-				return Err(format!(
-					"Invalid timestamp for block {}: expected >= {}, got {}",
-					new_block.height, ts, new_block.timestamp
-				).into());
+			if  checkpoint > 0
+			{
+				if new_block.height > UPDATE_2_HEIGHT && new_block.timestamp < ts {
+					return Err(format!(
+						"Invalid timestamp for block {}: expected >= {}, got {}",
+						new_block.height, ts, new_block.timestamp
+					).into());
+				}
+				
+				let receipts_root = merkle_tree(&new_block.transactions);
+				if receipts_root != new_block.receipts_root {
+					return Err(format!(
+						"Merkle check mismatch at block {}: expected {}, got {}",
+						new_block.height, receipts_root, new_block.receipts_root
+					).into());
+				}
+				
+				let c_difficulty = calculate_diff(new_block.block_reward, actual_height);
+				if c_difficulty != new_block.difficulty {
+					return Err(format!(
+						"Difficulty mismatch at block {}: expected {}, got {}",
+						new_block.height, c_difficulty, new_block.difficulty
+					).into());
+				}
+				
+				let hash = new_block.hash.clone();
+				new_block.signature = "".to_string();
+				new_block.hash = "".to_string();
+				let unhashed_serialized_block = serde_json::to_string_pretty(&new_block).unwrap();
+				let block_hash = keccak256(&unhashed_serialized_block);
+				
+				if hash != block_hash {
+					return Err(format!(
+						"Hash mismatch for block {}: expected {}, got {}",
+						new_block.height, block_hash, hash
+					).into());
+				}
+				new_block.hash = block_hash;
+				let unsigned_serialized_block = serde_json::to_string_pretty(&new_block).unwrap();
+				let block_signature = keccak256(&unsigned_serialized_block);
+				new_block.signature = block_signature;
+			
+				let diff_hex = format!("{:016X}", new_block.difficulty);
+				
+				let tx_parts: Vec<&str> = new_block.transactions.split('-').collect();
+				let first_two_txs = tx_parts.iter().take(2).cloned().collect::<Vec<&str>>().join("-");
+				
+				let mining_template = format!("{}-{}-{}-{}-{}-{}-{}", new_block.nonce, new_block.block_reward, 
+					diff_hex, new_block.height, new_block.prev_hash, new_block.miner, first_two_txs).to_lowercase();
+				let mining_hash = pokiohash_hash(&mining_template, &new_block.nonce);
+				let mining_difficulty = hash_to_difficulty(&mining_hash) as U256;
+				
+				if new_block.height > UPDATE_2_HEIGHT && mining_difficulty < c_difficulty.into() {
+					return Err(format!(
+						"Difficulty mismatch for block {}: expected {}, got {}",
+						new_block.height, c_difficulty, mining_difficulty
+					).into());
+				}
+			
+				/*let unsigned_serialized_block = serde_json::to_string_pretty(&new_block).unwrap();
+				let block_signature = keccak256(&unsigned_serialized_block);
+				new_block.signature = block_signature;
+				let serialized_block = bincode::serialize(&new_block).unwrap();
+				let unsigned_serialized_block = serde_json::to_string_pretty(&new_block).unwrap();*/
 			}
-			
-			let receipts_root = merkle_tree(&new_block.transactions);
-			if receipts_root != new_block.receipts_root {
-				return Err(format!(
-					"Merkle check mismatch at block {}: expected {}, got {}",
-					new_block.height, receipts_root, new_block.receipts_root
-				).into());
-			}
-			
-			let c_difficulty = calculate_diff(new_block.block_reward, actual_height);
-			if c_difficulty != new_block.difficulty {
-				return Err(format!(
-					"Difficulty mismatch at block {}: expected {}, got {}",
-					new_block.height, c_difficulty, new_block.difficulty
-				).into());
-			}
-			
-			let hash = new_block.hash.clone();
-			new_block.signature = "".to_string();
-			new_block.hash = "".to_string();
-			let unhashed_serialized_block = serde_json::to_string_pretty(&new_block).unwrap();
-			let block_hash = keccak256(&unhashed_serialized_block);
-			
-			if hash != block_hash {
-				return Err(format!(
-					"Hash mismatch for block {}: expected {}, got {}",
-					new_block.height, block_hash, hash
-				).into());
-			}
-			new_block.hash = block_hash;
-			let unsigned_serialized_block = serde_json::to_string_pretty(&new_block).unwrap();
-			let block_signature = keccak256(&unsigned_serialized_block);
-			new_block.signature = block_signature;
-			
-			let diff_hex = format!("{:016X}", new_block.difficulty);
-			
-			let tx_parts: Vec<&str> = new_block.transactions.split('-').collect();
-			let first_two_txs = tx_parts.iter().take(2).cloned().collect::<Vec<&str>>().join("-");
-			
-			let mining_template = format!("{}-{}-{}-{}-{}-{}-{}", new_block.nonce, new_block.block_reward, 
-				diff_hex, new_block.height, new_block.prev_hash, new_block.miner, first_two_txs).to_lowercase();
-			let mining_hash = pokiohash_hash(&mining_template, &new_block.nonce);
-			let mining_difficulty = hash_to_difficulty(&mining_hash) as U256;
-			
-			if new_block.height > UPDATE_2_HEIGHT && mining_difficulty < c_difficulty.into() {
-				return Err(format!(
-					"Difficulty mismatch for block {}: expected {}, got {}",
-					new_block.height, c_difficulty, mining_difficulty
-				).into());
-			}
-			
-			/*let unsigned_serialized_block = serde_json::to_string_pretty(&new_block).unwrap();
-			let block_signature = keccak256(&unsigned_serialized_block);
-			new_block.signature = block_signature;
-			let serialized_block = bincode::serialize(&new_block).unwrap();
-			let unsigned_serialized_block = serde_json::to_string_pretty(&new_block).unwrap();*/
 			
 			let serialized_block = bincode::serialize(new_block)?;
 			let _ = db.insert(format!("block:{:08}", new_block.height), serialized_block)?;

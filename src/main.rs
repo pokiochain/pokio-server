@@ -37,7 +37,7 @@ use std::collections::HashMap;
 use std::env;
 use std::time::{Instant, Duration};
 use std::io::{self, BufRead};
-
+use std::process;
 
 mod config;
 mod constants;
@@ -168,7 +168,7 @@ fn mine_block(coins: &str, miner: &str, nonce: &str) -> sled::Result<()> {
 			
 			new_block.hash = block_hash;
 			
-			if let Err(e) = save_block_to_db(&mut new_block) {
+			if let Err(e) = save_block_to_db(&mut new_block, 1) {
 				eprintln!("Error saving block: {}", e);
 			}
 		}
@@ -180,7 +180,25 @@ fn mine_block(coins: &str, miner: &str, nonce: &str) -> sled::Result<()> {
 #[tokio::main]
 async fn main() -> sled::Result<()> {	
 	let args: Vec<String> = env::args().collect();
+	
+	let help_mode = args.iter().any(|arg| arg == "--help") as u8;
+	
+	if help_mode == 1 {
+		println!("Options:");
+		println!("  --async          Run all operations asynchronously to improve performance.");
+		println!("  --fee value      Set a custom transaction fee (in %) for mined blocks.");
+		println!("  --http           Use HTTP protocol instead of NNG for peer communications.");
+		println!("  --nonng          Disable the NNG server startup (no NNG socket connections).");
+		println!("  --help           Display this help menu.");
+		println!();
+		println!("Example:");
+		println!("  pokio --async --http --nonng --fee 4");
+		process::exit(0);
+	}
+	
 	let async_mode = args.iter().any(|arg| arg == "--async") as u8;
+	let http_mode = args.iter().any(|arg| arg == "--http") as u8;
+	let nng_mode = args.iter().any(|arg| arg == "--nonng") as u8;
 	let pre_miningfee = args.iter().position(|arg| arg == "--fee")
 		.and_then(|i| args.get(i + 1))
 		.and_then(|t| t.parse::<usize>().ok())
@@ -192,6 +210,16 @@ async fn main() -> sled::Result<()> {
 		miningfee = 50;
 	} else {
 		miningfee = pre_miningfee;
+	}
+	
+	let mut server_address = "62.113.200.176".to_string();
+	if let Some(pos) = args.iter().position(|arg| arg == "--server") {
+		if let Some(addr) = args.get(pos + 1) {
+			server_address = addr.clone();
+		} else {
+			eprintln!("Error: --server option requires an address (e.g., IP or domain).");
+			std::process::exit(1);
+		}
 	}
 	
 	config::load_key();
@@ -219,17 +247,11 @@ async fn main() -> sled::Result<()> {
         }
     }
 	print_log_message(format!("Adjusted timestamp diff: {} seconds", config::ts_diff()), 1);
+	print_log_message(format!("checkpoint: {}, {}", CHECKPOINTS[0].height, CHECKPOINTS[0].hash), 1);
 	
 	set_latest_block_info();
 	print_log_message(format!("Chain started with height: {}, hash: {}", config::actual_height(), config::actual_hash()), 1);
 
-	print_log_message(format!("Starting NNG server..."), 1);
-	start_nng_server(vec![
-		"62.113.200.176".to_string(),
-		"207.180.213.141".to_string()
-	]);
-
-	
 	println!("");
 	println!("Available commands:");
 	println!("  help        - Show this help message");
@@ -238,6 +260,14 @@ async fn main() -> sled::Result<()> {
 	println!("  lastblock   - Show details of the most recently mined block");
 	println!("  setloglevel - Set log level (1 to 4)");
 	println!("");
+
+	if nng_mode == 0 {
+		print_log_message(format!("Starting NNG server..."), 1);
+		start_nng_server(vec![
+			"62.113.200.176".to_string(),
+			"207.180.213.141".to_string()
+		]);
+	}
 
 	
 	// i/o thread
@@ -303,17 +333,27 @@ async fn main() -> sled::Result<()> {
 	print_log_message(format!("Starting sync..."), 1);
 	//-- sync at start
 	config::update_full_sync(1);
-	let _ = tokio::spawn(full_sync_blocks()).await.unwrap();
+	let _ = tokio::spawn(full_sync_blocks(server_address.clone())).await.unwrap();
 	config::update_full_sync(0);
 	print_log_message(format!("Sync ended. Starting server..."), 1);
 
-	//-- nng connect
-	tokio::spawn(async {
-		let _ = connect_to_nng_server("62.113.200.176".to_string());
-	});
-	tokio::spawn(async {
-		let _ = connect_to_nng_server("207.180.213.141".to_string());
-	});
+	if http_mode == 0
+	{
+		//-- nng connect
+		tokio::spawn(async { let _ = connect_to_nng_server("62.113.200.176".to_string()); });
+		tokio::spawn(async { let _ = connect_to_nng_server("207.180.213.141".to_string()); });
+		//-- http connect
+		tokio::spawn(async { let _ = connect_to_http_server("62.113.200.176".to_string()); });
+		std::thread::sleep(std::time::Duration::from_millis(1300));
+		tokio::spawn(async { let _ = connect_to_http_server("207.180.213.141".to_string()); });
+	}
+	else
+	{
+		//-- http connect
+		tokio::spawn(async { let _ = connect_to_http_server("62.113.200.176".to_string()); });
+		std::thread::sleep(std::time::Duration::from_millis(1300));
+		tokio::spawn(async { let _ = connect_to_http_server("207.180.213.141".to_string()); });
+	}
 
 	
 	let rpc_route = warp::path("rpc")
@@ -541,7 +581,7 @@ async fn main() -> sled::Result<()> {
 									
 									print_log_message(format!("New block received: {:?}", new_block.height), 1);
 									
-									if let Err(e) = save_block_to_db(&mut new_block) {
+									if let Err(e) = save_block_to_db(&mut new_block, 1) {
 										eprintln!("Error saving block: {}", e);
 										json!({"jsonrpc": "2.0", "id": id, "result": "error"})
 									} else {
@@ -567,12 +607,12 @@ async fn main() -> sled::Result<()> {
 	Ok(())
 }
 
-async fn full_sync_blocks() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn full_sync_blocks(pserver: String) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 	let client = Client::new();
-	let rpc_url = "http://207.180.213.141:30303/rpc";
+	let rpc_url = format!("http://{}:30303/rpc", pserver);
 	let db = config::db();
 	loop {
-		let max_block_response = client.post(rpc_url)
+		let max_block_response = client.post(&rpc_url)
 			.json(&json!({ "jsonrpc": "2.0", "id": 1, "method": "eth_blockNumber", "params": [] }))
 			.send()
 			.await?;
@@ -580,7 +620,7 @@ async fn full_sync_blocks() -> Result<(), Box<dyn std::error::Error + Send + Syn
 		let max_block = u64::from_str_radix(max_block_json["result"].as_str().unwrap().trim_start_matches("0x"), 16)?;
 		let (mut actual_height, mut _actual_hash, _) = get_latest_block_info();
 		while actual_height < max_block {
-			let blocks_response = client.post(rpc_url)
+			let blocks_response = client.post(&rpc_url)
 				.json(&json!({ "jsonrpc": "2.0", "id": 1, "method": "pokio_getBlocks", "params": [(actual_height+1).to_string()] }))
 				.send()
 				.await?;
@@ -607,8 +647,30 @@ async fn full_sync_blocks() -> Result<(), Box<dyn std::error::Error + Send + Syn
 						version: first_block.get("version").and_then(|v| v.as_u64()).map(|v| v as u32).expect("REASON"),
 						signature: first_block.get("signature").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| String::from("")),
 					};
-					if let Err(e) = save_block_to_db(&mut new_block) {
-						eprintln!("Error saving block: {}", e);
+					let mut is_checkpoint = false;
+
+					for checkpoint in CHECKPOINTS.iter() {
+						if new_block.height == checkpoint.height {
+							is_checkpoint = true;
+							if new_block.hash != checkpoint.hash {
+								eprintln!("Block hash mismatch at height {}!", new_block.height);
+								process::exit(1);
+							}
+							print_log_message(format!("Checkpoint passed, block: {}", new_block.height), 1);
+							break;
+						}
+					}
+
+					let last_checkpoint_height = CHECKPOINTS.last().unwrap().height;
+
+					if is_checkpoint || new_block.height <= last_checkpoint_height {
+						if let Err(e) = save_block_to_db(&mut new_block, 0) {
+							eprintln!("Error saving block: {}", e);
+						}
+					} else {
+						if let Err(e) = save_block_to_db(&mut new_block, 1) {
+							eprintln!("Error saving block: {}", e);
+						}
 					}
 				}
 			}
