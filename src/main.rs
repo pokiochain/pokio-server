@@ -189,10 +189,11 @@ async fn main() -> sled::Result<()> {
 		println!("  --fee value      Set a custom transaction fee (in %) for mined blocks.");
 		println!("  --http           Use HTTP protocol instead of NNG for peer communications.");
 		println!("  --nonng          Disable the NNG server startup (no NNG socket connections).");
+		println!("  --server addr    Connect to a specific server IP or domain for synchronization.");
 		println!("  --help           Display this help menu.");
 		println!();
 		println!("Example:");
-		println!("  pokio --async --http --nonng --fee 4");
+		println!("  pokio --async --http --nonng --fee 4 --server node1.pokio.xyz");
 		process::exit(0);
 	}
 	
