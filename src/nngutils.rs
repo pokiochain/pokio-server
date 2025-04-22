@@ -34,7 +34,7 @@ pub fn start_nng_server(ips: Vec<String>) {
 				.collect();
 
 			loop {
-				if config::full_sync_status() == 0 {
+				if config::sync_status() == 0 && config::full_sync_status() == 0 {
 					let (actual_height, _actual_hash, _) = get_latest_block_info();
 					if actual_height != s_height {
 						let message = actual_height.to_string();
@@ -187,7 +187,7 @@ pub fn connect_to_nng_server(pserver: String) -> Result<(), Box<dyn std::error::
 			print_log_message(format!("Connected to {} NNG server", pserver), 1);
 			let mut last_mempool_check = Instant::now();
 			loop {
-				if config::sync_status() == 0 {
+				if config::sync_status() == 0 && config::full_sync_status() == 0 {
 					if last_mempool_check.elapsed() >= Duration::from_secs(5) {
 						last_mempool_check = Instant::now();
 						if let Ok(response) = client
@@ -245,11 +245,6 @@ pub fn connect_to_nng_server(pserver: String) -> Result<(), Box<dyn std::error::
 									continue;
 								}
 							};
-							if config::async_status() == 0 {
-								while config::sync_status() == 1 {
-									std::thread::sleep(std::time::Duration::from_millis(10));
-								}
-							}
 							
 							if let Some(blocks_array) = blocks_json["result"].as_array() {
 								for block in blocks_array {
@@ -305,7 +300,7 @@ pub fn connect_to_http_server(pserver: String) -> Result<(), Box<dyn std::error:
 		rt.block_on(async move {
 			let mut last_mempool_check = Instant::now();
 			loop {
-				if config::sync_status() == 0 {
+				if config::full_sync_status() == 0 {
 					if last_mempool_check.elapsed() >= Duration::from_secs(5) {
 						last_mempool_check = Instant::now();
 						let rpc_url = format!("http://{}:30303/rpc", pserver);
@@ -362,11 +357,6 @@ pub fn connect_to_http_server(pserver: String) -> Result<(), Box<dyn std::error:
 							continue;
 						}
 					};
-					if config::async_status() == 0 {
-						while config::sync_status() == 1 {
-							std::thread::sleep(std::time::Duration::from_millis(10));
-						}
-					}
 							
 					if let Some(blocks_array) = blocks_json["result"].as_array() {
 						for block in blocks_array {
@@ -399,51 +389,54 @@ pub fn connect_to_http_server(pserver: String) -> Result<(), Box<dyn std::error:
 				
 				thread::sleep(Duration::from_millis(3000));
 				
-				let (actual_height, block_hash, _) = get_latest_block_info();
-				let x_rpc_url = format!("http://{}:30303/rpc", pserver);
-				let request_body = json!({
-					"jsonrpc": "2.0",
-					"id": 1,
-					"method": "eth_getBlockByNumber",
-					"params": [
-						format!("0x{:x}", actual_height),
-						false
-					]
-				});
+				if config::full_sync_status() == 0 {
+					let (actual_height, block_hash, _) = get_latest_block_info();
+					let x_rpc_url = format!("http://{}:30303/rpc", pserver);
+					let request_body = json!({
+						"jsonrpc": "2.0",
+						"id": 1,
+						"method": "eth_getBlockByNumber",
+						"params": [
+							format!("0x{:x}", actual_height),
+							false
+						]
+					});
 
-				let response = match client
-					.post(x_rpc_url)
-					.json(&request_body)
-					.send()
-					.await
-				{
-					Ok(res) => res,
-					Err(e) => {
-						eprintln!("Error sending request: {:?}", e);
-						continue;
-					}
-				};
+					let response = match client
+						.post(x_rpc_url)
+						.json(&request_body)
+						.send()
+						.await
+					{
+						Ok(res) => res,
+						Err(e) => {
+							eprintln!("Error sending request: {:?}", e);
+							continue;
+						}
+					};
 
-				let block_json: serde_json::Value = match response.json().await {
-					Ok(json) => json,
-					Err(e) => {
-						eprintln!("Error processing request: {:?}", e);
-						continue;
-					}
-				};
+					let block_json: serde_json::Value = match response.json().await {
+						Ok(json) => json,
+						Err(e) => {
+							eprintln!("Error processing request: {:?}", e);
+							continue;
+						}
+					};
 
-				if let Some(hash) = block_json.get("result").and_then(|r| r.get("hash")).and_then(|h| h.as_str()) {
-					if block_hash == hash {
-						print_log_message(format!("Blockchain status: clean"), 4);
-					} else {
-						print_log_message(format!("Hash error on block {}: {} != {}", actual_height, hash, block_hash), 1);
-						fix_blockchain(actual_height - (FIX_BC_OFFSET * 10));
-					}
-				} /*else {
-					print_log_message(format!("Hash error on block {}.", actual_height), 2);
-					//fix_blockchain(actual_height - (FIX_BC_OFFSET * 10));
-				}*/
-				
+					if let Some(hash) = block_json.get("result").and_then(|r| r.get("hash")).and_then(|h| h.as_str()) {
+						if block_hash == hash {
+							print_log_message(format!("Blockchain status: clean"), 4);
+						} else {
+							print_log_message(format!("Hash error on block {}: {} != {}", actual_height, hash, block_hash), 1);
+							config::update_full_sync(1);
+							fix_blockchain(actual_height - (FIX_BC_OFFSET * 10));
+							config::update_full_sync(0);
+						}
+					} /*else {
+						print_log_message(format!("Hash error on block {}.", actual_height), 2);
+						//fix_blockchain(actual_height - (FIX_BC_OFFSET * 10));
+					}*/
+				}
 			}
 		});
 	});

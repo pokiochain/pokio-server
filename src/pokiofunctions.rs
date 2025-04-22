@@ -287,6 +287,17 @@ pub fn get_mining_template(coins: &str, miner: &str) -> String {
 }
 
 pub fn fix_blockchain(last_valid_height: u64) -> Option<Block> {
+	
+	if config::async_status() == 0
+	{
+		while config::sync_status() == 1 {
+			std::thread::sleep(std::time::Duration::from_millis(10));
+		}
+	}
+	config::update_sync(1);
+	
+	//println!("DELETING UNTIL: {}", last_valid_height);
+	
 	if last_valid_height > UNLOCK_OFFSET {
 		let db = config::db();
 
@@ -297,12 +308,26 @@ pub fn fix_blockchain(last_valid_height: u64) -> Option<Block> {
 			for h in last_valid_height + 1..=latest_height {
 				let key_to_delete = format!("block:{:08}", h);
 				db.remove(&key_to_delete).unwrap();
+				//println!("DELETE BLOCK: {}", h);
 			}
 			let _ = db.insert("chain:latest_block", &last_valid_height.to_be_bytes())
 				.unwrap();
-			print_log_message(format!("Blockchain reordered, height: {}.", last_valid_height), 1);
+			//set_latest_block_info();
+			let block_key = format!("block:{:08}", last_valid_height);
+			if let Some(block_data) = db.get(block_key).unwrap() {
+				let block: Block = bincode::deserialize(&block_data).unwrap();
+				config::update_actual_height(block.height);
+				config::update_actual_hash(block.hash);
+				config::update_actual_timestamp(block.timestamp);
+				//println!("LAST BLOCK SET: {}", config::actual_height());
+			}
+			
+			print_log_message(format!("Blockchain reordered"), 1);
 		}
 	}
+	
+	config::update_sync(0);
+	
 	None
 }
 
@@ -332,17 +357,23 @@ pub fn get_16th_block() -> Option<Block> {
 						let prev_block: Block = bincode::deserialize(&prev_block_data).unwrap();
 
 						if prev_block.hash != block.prev_hash {
-							print_log_message(format!("Reordering blockchain from block..."), 1);
+							print_log_message(format!("Reordering blockchain..."), 1);
+							config::update_full_sync(1);
 							fix_blockchain(block.height - FIX_BC_OFFSET);
+							config::update_full_sync(0);
 							return None;
 						}
 						block_key = prev_block_key;
 					} else {
+						config::update_full_sync(1);
 						fix_blockchain(block.height - FIX_BC_OFFSET);
+						config::update_full_sync(0);
 						break;
 					}
 				} else {
+					config::update_full_sync(1);
 					fix_blockchain(block.height - FIX_BC_OFFSET);
+					config::update_full_sync(0);
 					break;
 				}
 			} else {
