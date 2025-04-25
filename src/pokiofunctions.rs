@@ -723,7 +723,7 @@ pub fn save_block_to_db(new_block: &mut Block, checkpoint: u8) -> Result<(), Box
 					let transactions: Vec<&str> = block.transactions.split('-').collect();
 
 					for tx_str in transactions {
-						match get_rawtx_status(tx_str.clone()) {
+						/*match get_rawtx_status(tx_str.clone()) {
 							Some(status) if status == "processed" => {
 								let _ = db.insert(tx_str, b"confirmed")?;
 								continue;
@@ -733,7 +733,24 @@ pub fn save_block_to_db(new_block: &mut Block, checkpoint: u8) -> Result<(), Box
 								continue;
 							}
 							_ => {}
+						}*/
+						match get_rawtx_status(tx_str.clone()) {
+							Some(status) if status == "processed" => {
+								let _ = db.insert(tx_str, b"confirmed")?;
+								continue;
+							}
+							Some(status) if status == "error" => {
+								let _ = db.insert(tx_str, b"confirmed_with_error")?;
+								continue;
+							}
+							Some(status) => {
+								print_log_message(format!("Unexpected status  {}: {}", tx_str, status);
+								//let _ = db.insert(tx_str, b"unhandled_status")?;
+								continue;
+							}
+							None => { }
 						}
+
 						let dtx = decode_transaction(tx_str);
 						
 						match dtx {
