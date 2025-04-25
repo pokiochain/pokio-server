@@ -18,7 +18,7 @@ pub const COIN_DIFF: u64 = 2500000;
 pub const COIN_DIFF_2: u64 = 5000000;
 pub const COIN_DIFF_DELAY: u64 = 100;
 pub const MAX_COIN_DELAY: u64 = 10000;
-pub const CHECKPOINTS: [Checkpoint; 7] = [
+pub const CHECKPOINTS: [Checkpoint; 8] = [
     Checkpoint { height: 5000, hash: "5dc59b4850c155832b29e490fb85db6735fc0777fc372ba90955e876aabc1267" },
     Checkpoint { height: 15000, hash: "82d7456b8587dcbb206d4d20f0fc5c9e118c7c79560a25caa97e254fe93cff9b" },
     Checkpoint { height: 35000, hash: "913f0359d81561649fe31f0f438797a12974c10f7e19f5eacc0baaed18c3eb40" },
@@ -26,4 +26,5 @@ pub const CHECKPOINTS: [Checkpoint; 7] = [
     Checkpoint { height: 110000, hash: "322c30dc700bc6ee13fc71ecafdfd8105f59de631b886eb6c88c1a6f6374854a" },
     Checkpoint { height: 150000, hash: "671c4a8930a967077c7842055afb45641047238062ade248b905665ffcc0ecb3" },
     Checkpoint { height: 188000, hash: "a5a494f292ba14117028a7cc957e870469193d60dbed801ab4092aa91a694d29" },
+	Checkpoint { height: 222900, hash: "ee41684b5f172f01efdd5d2289eb05b6cc36ddcda2a5bb825c4ec69d80ac0e2d" },
 ];
