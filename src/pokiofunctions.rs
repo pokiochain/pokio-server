@@ -744,8 +744,7 @@ pub fn save_block_to_db(new_block: &mut Block, checkpoint: u8) -> Result<(), Box
 								continue;
 							}
 							Some(status) => {
-								print_log_message(format!("Unexpected status  {}: {}", tx_str, status);
-								//let _ = db.insert(tx_str, b"unhandled_status")?;
+								print_log_message(format!("Unexpected status  {}: {}", tx_str, status), 4);
 								continue;
 							}
 							None => { }
