@@ -261,15 +261,6 @@ async fn main() -> sled::Result<()> {
 	println!("  lastblock   - Show details of the most recently mined block");
 	println!("  setloglevel - Set log level (1 to 4)");
 	println!("");
-
-	if nng_mode == 0 {
-		print_log_message(format!("Starting NNG server..."), 1);
-		start_nng_server(vec![
-			"62.113.200.176".to_string(),
-			"207.180.213.141".to_string()
-		]);
-	}
-
 	
 	// i/o thread
 	thread::spawn(move || {
@@ -334,9 +325,18 @@ async fn main() -> sled::Result<()> {
 	print_log_message(format!("Starting sync..."), 1);
 	//-- sync at start
 	config::update_full_sync(1);
-	let _ = tokio::spawn(full_sync_blocks(server_address.clone())).await.unwrap();
+	let _ = tokio::spawn(full_sync_blocks("62.113.200.176".to_string())).await.unwrap();
+	let _ = tokio::spawn(full_sync_blocks("207.180.213.141".to_string())).await.unwrap();
 	config::update_full_sync(0);
 	print_log_message(format!("Sync ended. Starting server..."), 1);
+	
+	if nng_mode == 0 {
+		print_log_message(format!("Starting NNG server..."), 1);
+		start_nng_server(vec![
+			"62.113.200.176".to_string(),
+			"207.180.213.141".to_string()
+		]);
+	}
 
 	if http_mode == 0
 	{
@@ -609,7 +609,10 @@ async fn main() -> sled::Result<()> {
 }
 
 async fn full_sync_blocks(pserver: String) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-	let client = Client::new();
+	let client = Client::builder()
+		.timeout(Duration::from_secs(2))
+		.build()
+		.expect("Failed to build HTTP client");
 	let rpc_url = format!("http://{}:30303/rpc", pserver);
 	let db = config::db();
 	loop {
@@ -674,6 +677,9 @@ async fn full_sync_blocks(pserver: String) -> Result<(), Box<dyn std::error::Err
 						}
 					}
 				}
+			} else {
+				print_log_message(format!("Sync error, stopping..."), 1);
+				break;
 			}
 			(actual_height, _actual_hash, _) = get_latest_block_info();
 			print_log_message(format!("Block {} synced...", actual_height), 1);
