@@ -602,8 +602,6 @@ async fn main() -> sled::Result<()> {
 
 					let mut total_hr: u64 = 0;
 					let db = config::pooldb();
-
-					// Recorremos los mineros activos
 					for (_miner, workers) in active_miners {
 						for id in workers {
 							let key = format!("miner_{}", id);
@@ -611,7 +609,6 @@ async fn main() -> sled::Result<()> {
 								if let Ok(worker_info) = serde_json::from_slice::<serde_json::Value>(&data) {
 									if let Some(hr_str) = worker_info["hr"].as_str() {
 										if !hr_str.is_empty() {
-											// Intentamos convertir el string a u64 y lo sumamos
 											if let Ok(hr_value) = hr_str.parse::<u64>() {
 												total_hr += hr_value;
 											}
@@ -623,6 +620,9 @@ async fn main() -> sled::Result<()> {
 					}
 
 					json!({"jsonrpc": "2.0", "id": id, "result": total_hr})
+				},
+				"getFee" => {
+					json!({"jsonrpc": "2.0", "id": id, "result": config::mining_fee() })
 				},
 				"submitBlock" => {
 					let coins = data["coins"].as_str().unwrap_or("1000");
