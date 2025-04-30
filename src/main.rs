@@ -38,6 +38,7 @@ use std::env;
 use std::time::{Instant, Duration};
 use std::io::{self, BufRead};
 use std::process;
+use warp::filters::addr::remote;
 
 mod config;
 mod constants;
@@ -359,8 +360,16 @@ async fn main() -> sled::Result<()> {
 	
 	let rpc_route = warp::path("rpc")
 		.and(warp::post())
+		.and(remote())
 		.and(warp::body::json())
-		.map(|data: serde_json::Value| {
+		.map(|addr: Option<std::net::SocketAddr>, data: serde_json::Value| {
+			
+			if let Some(addr) = addr {
+				print_log_message(format!("Request from IP: {}", addr.ip()), 2);
+			} else {
+				print_log_message("Request from unknown IP".to_string(), 2);
+			}
+			
 			let id = data["id"].as_str().unwrap_or("unknown");
 			let method = data["method"].as_str().unwrap_or("");
 			
@@ -528,24 +537,92 @@ async fn main() -> sled::Result<()> {
 		
 	let mining_route = warp::path("mining")
 		.and(warp::post())
+		.and(remote())
 		.and(warp::body::json())
-		.map(|data: serde_json::Value| {
+		.map(|addr: Option<std::net::SocketAddr>, data: serde_json::Value| {
+			
+			if let Some(addr) = addr {
+				print_log_message(format!("Request from IP: {}", addr.ip()), 2);
+			} else {
+				print_log_message("Request from unknown IP".to_string(), 2);
+			}
+			
 			let id = data["id"].as_str().unwrap_or("unknown");
 			let method = data["method"].as_str().unwrap_or("");
 			let response = match method {
 				"getMiningTemplate" => {
 					let coins = data["coins"].as_str().unwrap_or("1000");
 					let miner = data["miner"].as_str().unwrap_or("");
+					let hr = data["hr"].as_str().unwrap_or("");
 					let mining_template = get_mining_template(coins, miner);
-					save_miner(miner, id);
+					save_miner(&miner.to_lowercase(), id, coins, hr);
 					let seconds = 600;
 					let _active_miners = count_active_miners(seconds);
 					json!({"jsonrpc": "2.0", "id": id, "result": mining_template})
 				},
 				"getMinersCount" => {
 					let seconds = 600;
+					let active_miners = count_active_miners(seconds);					
+					let seconds = 600;
+					let mut active_workers = 0;
 					let active_miners = count_active_miners(seconds);
-					json!({"jsonrpc": "2.0", "id": id, "result": active_miners.len()})
+					for (_miner, workers) in &active_miners {
+						active_workers += workers.len();
+					}
+					json!({"jsonrpc": "2.0", "id": id, "result": { "miners" : active_miners.len(), "workers" : active_workers } })
+					
+				},
+				"getWorkers" => {
+					let miner = data["params"]
+						.get(0)
+						.and_then(|v| v.as_str())
+						.unwrap_or("");
+
+					let seconds = 600;
+					let active_miners = count_active_miners(seconds);
+					let db = config::pooldb();
+					let mut result = vec![];
+
+					if let Some(workers) = active_miners.get(&miner.to_lowercase()) {
+						for id in workers {
+							let key = format!("miner_{}", id);
+							if let Ok(Some(data)) = db.get(key) {
+								if let Ok(json_data) = serde_json::from_slice::<Value>(&data) {
+									result.push(json_data);
+								}
+							}
+						}
+					}
+
+					json!({ "jsonrpc": "2.0", "id": id, "result": result })
+				},
+				"getHR" => {
+					let seconds = 600;
+					let active_miners = count_active_miners(seconds);
+
+					let mut total_hr: u64 = 0;
+					let db = config::pooldb();
+
+					// Recorremos los mineros activos
+					for (_miner, workers) in active_miners {
+						for id in workers {
+							let key = format!("miner_{}", id);
+							if let Ok(Some(data)) = db.get(&key) {
+								if let Ok(worker_info) = serde_json::from_slice::<serde_json::Value>(&data) {
+									if let Some(hr_str) = worker_info["hr"].as_str() {
+										if !hr_str.is_empty() {
+											// Intentamos convertir el string a u64 y lo sumamos
+											if let Ok(hr_value) = hr_str.parse::<u64>() {
+												total_hr += hr_value;
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+
+					json!({"jsonrpc": "2.0", "id": id, "result": total_hr})
 				},
 				"submitBlock" => {
 					let coins = data["coins"].as_str().unwrap_or("1000");

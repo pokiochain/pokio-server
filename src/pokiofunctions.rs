@@ -828,7 +828,7 @@ pub fn get_mempool_records() -> Result<serde_json::Value, sled::Error> {
     Ok(json!(records))
 }
 
-pub fn save_miner(miner: &str, id: &str) {
+pub fn save_miner(miner: &str, id: &str, coins: &str, hr: &str) {
 	let db = config::pooldb();
 	let timestamp = SystemTime::now()
 		.duration_since(UNIX_EPOCH)
@@ -838,6 +838,8 @@ pub fn save_miner(miner: &str, id: &str) {
 	let miner_data = json!({
 		"miner": miner,
 		"id": id,
+		"target" : coins,
+		"hr" : hr,
 		"timestamp": timestamp
 	});
 
@@ -859,9 +861,11 @@ pub fn count_active_miners(seconds: u64) -> HashMap<String, Vec<String>> {
 
 			if key_str.starts_with("miner_") {
 				if let Ok(json) = serde_json::from_slice::<Value>(&value) {
-					if let (Some(miner), Some(id), Some(timestamp)) = (
+					if let (Some(miner), Some(id), Some(target), Some(hr), Some(timestamp)) = (
 						json["miner"].as_str(),
 						json["id"].as_str(),
+						json["target"].as_str(),
+						json["hr"].as_str(),
 						json["timestamp"].as_u64(),
 					) {
 						if now - timestamp as u128 <= (seconds * 1000) as u128 {
