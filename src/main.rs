@@ -171,6 +171,8 @@ fn mine_block(coins: &str, miner: &str, nonce: &str) -> sled::Result<()> {
 			
 			if let Err(e) = save_block_to_db(&mut new_block, 1) {
 				eprintln!("Error saving block: {}", e);
+			} else {
+				add_block_to_history(new_block.height, new_block.timestamp, new_block.difficulty, 1);
 			}
 		}
 		Ok(())
@@ -252,6 +254,7 @@ async fn main() -> sled::Result<()> {
 	print_log_message(format!("checkpoint: {}, {}", CHECKPOINTS[0].height, CHECKPOINTS[0].hash), 1);
 	
 	set_latest_block_info();
+	preload_block_history();
 	print_log_message(format!("Chain started with height: {}, hash: {}", config::actual_height(), config::actual_hash()), 1);
 
 	println!("");
@@ -596,29 +599,12 @@ async fn main() -> sled::Result<()> {
 
 					json!({ "jsonrpc": "2.0", "id": id, "result": result })
 				},
-				"getHR" => {
-					let seconds = 600;
-					let active_miners = count_active_miners(seconds);
-
-					let mut total_hr: u64 = 0;
-					let db = config::pooldb();
-					for (_miner, workers) in active_miners {
-						for id in workers {
-							let key = format!("miner_{}", id);
-							if let Ok(Some(data)) = db.get(&key) {
-								if let Ok(worker_info) = serde_json::from_slice::<serde_json::Value>(&data) {
-									if let Some(hr_str) = worker_info["hr"].as_str() {
-										if !hr_str.is_empty() {
-											if let Ok(hr_value) = hr_str.parse::<u64>() {
-												total_hr += hr_value;
-											}
-										}
-									}
-								}
-							}
-						}
-					}
-
+				"getPoolDifficulty" => {
+					let total_hr = sum_recent_difficulty(600, 1);
+					json!({"jsonrpc": "2.0", "id": id, "result": total_hr})
+				},
+				"getNetDifficulty" => {
+					let total_hr = sum_recent_difficulty(600, 0);
 					json!({"jsonrpc": "2.0", "id": id, "result": total_hr})
 				},
 				"getFee" => {

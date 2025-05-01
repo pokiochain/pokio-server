@@ -26,6 +26,9 @@ use serde_json::Value;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::collections::HashMap;
 use chrono::Local;
+use std::collections::VecDeque;
+use std::sync::Mutex;
+use once_cell::sync::Lazy;
 
 
 use crate::constants::*;
@@ -54,6 +57,33 @@ pub struct Block {
     pub extra_data: String,
     pub version: u32,
     pub signature: String,
+}
+pub static BLOCK_HISTORY: Lazy<Mutex<VecDeque<(u64, u64, u64, u8)>>> = Lazy::new(|| {
+    Mutex::new(VecDeque::new())
+});
+
+pub fn add_block_to_history(height: u64, timestamp: u64, difficulty: u64, is_local: u8) {
+    let mut history = BLOCK_HISTORY.lock().unwrap();
+    let pos = history.iter().position(|(h, _, _, _)| *h < height).unwrap_or(history.len());
+    history.insert(pos, (height, timestamp, difficulty, is_local));
+    if history.len() > 600 {
+        history.pop_back();
+    }
+}
+
+pub fn sum_recent_difficulty(seconds: u64, is_local_filter: u8) -> u64 {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("Time went backwards")
+        .as_secs();
+    let cutoff = now - seconds;
+    let history = BLOCK_HISTORY.lock().unwrap();
+    history.iter()
+        .filter(|(_, timestamp, _, is_local)| {
+            *timestamp >= cutoff && (is_local_filter == 0 || *is_local == 1)
+        })
+        .map(|(_, _, difficulty, _)| *difficulty)
+        .sum()
 }
 
 pub fn get_block_tx_hashes(blockhash: &str) -> Option<String> {
@@ -329,6 +359,36 @@ pub fn fix_blockchain(last_valid_height: u64) -> Option<Block> {
 	config::update_sync(0);
 	
 	None
+}
+
+pub fn preload_block_history() {
+    let db = config::db();
+    let my_address = format!("0x{}", hex::encode(config::address())).to_lowercase();
+    if let Some(latest) = db.get("chain:latest_block").unwrap() {
+        let mut height = u64::from_be_bytes(latest.as_ref().try_into().unwrap());
+        for _ in 0..600 {
+            let key = format!("block:{:08}", height);
+            if let Some(block_data) = db.get(&key).unwrap() {
+                if let Ok(block) = bincode::deserialize::<Block>(&block_data) {
+                    let mut is_local = 0;
+                    if let Some(first_tx) = block.transactions.split('-').next() {
+                        if let Ok(decoded_tx) = decode_transaction(first_tx) {
+                            let sender_address = format!("0x{}", hex::encode(decoded_tx.from)).to_lowercase();
+                            if sender_address == my_address {
+                                is_local = 1;
+                            }
+                        }
+                    }
+                    add_block_to_history(block.height, block.timestamp, block.difficulty, is_local);
+                }
+            }
+            if height == 0 {
+                break;
+            } else {
+                height -= 1;
+            }
+        }
+    }
 }
 
 pub fn get_16th_block() -> Option<Block> {

@@ -282,6 +282,8 @@ pub fn connect_to_nng_server(pserver: String) -> Result<(), Box<dyn std::error::
 											
 											if let Err(e) = save_block_to_db(&mut new_block, 1) {
 												eprintln!("Error saving block: {}", e);
+											}  else {
+												add_block_to_history(new_block.height, new_block.timestamp, new_block.difficulty, 0);
 											}
 										}
 									}
@@ -409,6 +411,8 @@ pub fn connect_to_http_server(pserver: String) -> Result<(), Box<dyn std::error:
 							
 							if let Err(e) = save_block_to_db(&mut new_block, 1) {
 								eprintln!("Error saving block: {}", e);
+							} else {
+								add_block_to_history(new_block.height, new_block.timestamp, new_block.difficulty, 0);
 							}
 						}
 					}
