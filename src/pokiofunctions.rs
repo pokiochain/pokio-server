@@ -58,6 +58,16 @@ pub struct Block {
     pub version: u32,
     pub signature: String,
 }
+
+#[derive(Debug)]
+pub struct MinerInfo {
+    pub id: String,
+    pub target: String,
+    pub hr: String,
+    pub timestamp: u64,
+    pub mined_blocks: u64,
+}
+
 pub static BLOCK_HISTORY: Lazy<Mutex<VecDeque<(u64, u64, u64, u8)>>> = Lazy::new(|| {
     Mutex::new(VecDeque::new())
 });
@@ -76,7 +86,7 @@ pub fn sum_recent_difficulty(seconds: u64, is_local_filter: u8) -> u64 {
         .duration_since(UNIX_EPOCH)
         .expect("Time went backwards")
         .as_secs();
-    let cutoff = now - seconds;
+    let cutoff = config::actual_timestamp() - seconds;
     let history = BLOCK_HISTORY.lock().unwrap();
     history.iter()
         .filter(|(_, timestamp, _, is_local)| {
@@ -867,6 +877,80 @@ pub fn save_block_to_db(new_block: &mut Block, checkpoint: u8) -> Result<(), Box
 	result
 }
 
+pub fn save_mined_block(new_block: &mut Block, miningid: &str) -> Result<(), Box<dyn Error>> {
+    let result = (|| {
+        let db = config::pooldb();
+        new_block.miner = new_block.miner.to_lowercase();
+        let serialized_block = bincode::serialize(&new_block)?;
+        db.insert(format!("block:{:08}", new_block.height), serialized_block)?;
+        let counter_key = format!("minedblocks:{}:{}", new_block.miner, miningid);
+        let current_count = db
+            .get(&counter_key)?
+            .map(|val| {
+                let bytes: [u8; 8] = val.as_ref().try_into().unwrap_or([0u8; 8]);
+                u64::from_be_bytes(bytes)
+            })
+            .unwrap_or(0);
+        let new_count = current_count + 1;
+        db.insert(counter_key, &new_count.to_be_bytes())?;
+        print_log_message(
+            format!(
+                "Block {} saved. Total blocks mined by {}: {}",
+                new_block.height,
+                new_block.miner,
+                new_count
+            ),
+            3,
+        );
+
+        Ok(())
+    })();
+    result
+}
+
+pub fn get_all_miningids_for_miner(miner: &str) -> Result<Vec<(String, u64)>, Box<dyn std::error::Error>> {
+    let db = config::pooldb();
+    let miner_lower = miner.to_lowercase();
+    let prefix = format!("minedblocks:{}:", miner_lower);
+    let mut results = Vec::new();
+    for item in db.scan_prefix(prefix.as_bytes()) {
+        let (key, value) = item?;
+        let key_str = std::str::from_utf8(&key)?;
+        let parts: Vec<&str> = key_str.splitn(3, ':').collect();
+        if parts.len() == 3 {
+            let miningid = parts[2].to_string();
+            let count_bytes: [u8; 8] = value.as_ref().try_into().unwrap_or([0u8; 8]);
+            let count = u64::from_be_bytes(count_bytes);
+            results.push((miningid, count));
+        }
+    }
+    Ok(results)
+}
+
+pub fn get_blocks_paginated(limit: usize, offset: usize) -> Result<Vec<Block>, Box<dyn std::error::Error>> {
+    let db = config::pooldb();
+    let mut blocks = Vec::new();
+    let mut skipped = 0;
+    for item in db.iter().rev() {
+        let (key, value) = item?;
+        let key_str = std::str::from_utf8(&key)?;
+        if key_str.starts_with("block:") {
+            if skipped < offset {
+                skipped += 1;
+                continue;
+            }
+
+            let block: Block = bincode::deserialize(&value)?;
+            blocks.push(block);
+
+            if blocks.len() >= limit {
+                break;
+            }
+        }
+    }
+    Ok(blocks)
+}
+
 pub fn get_mempool_records() -> Result<serde_json::Value, sled::Error> {
     let mut records = Vec::new();
     let mempooldb = config::mempooldb();
@@ -907,37 +991,47 @@ pub fn save_miner(miner: &str, id: &str, coins: &str, hr: &str) {
 	let _ = db.insert(key, serde_json::to_vec(&miner_data).unwrap()).unwrap();
 }
 
-pub fn count_active_miners(seconds: u64) -> HashMap<String, Vec<String>> {
-	let db = config::pooldb();
-	let mut miners_map: HashMap<String, Vec<String>> = HashMap::new();
-	let now = SystemTime::now()
-		.duration_since(UNIX_EPOCH)
-		.unwrap()
-		.as_millis();
+pub fn count_active_miners(seconds: u64) -> HashMap<String, Vec<MinerInfo>> {
+    let db = config::pooldb();
+    let mut miners_map: HashMap<String, Vec<MinerInfo>> = HashMap::new();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis();
+    for item in db.iter() {
+        if let Ok((key, value)) = item {
+            let key_str = String::from_utf8_lossy(&key);
+            if key_str.starts_with("miner_") {
+                if let Ok(json) = serde_json::from_slice::<Value>(&value) {
+                    if let (Some(miner), Some(id), Some(target), Some(hr), Some(timestamp)) = (
+                        json["miner"].as_str(),
+                        json["id"].as_str(),
+                        json["target"].as_str(),
+                        json["hr"].as_str(),
+                        json["timestamp"].as_u64(),
+                    ) {
+                        if now - timestamp as u128 <= (seconds * 1000) as u128 {
+                            let miner_str = miner.to_string();
+                            let mined_blocks = match get_all_miningids_for_miner(miner) {
+                                Ok(mined_blocks_data) => mined_blocks_data.iter().map(|(_, count)| count).sum(),
+                                Err(_) => 0,
+                            };
+                            let miner_info = MinerInfo {
+                                id: id.to_string(),
+                                target: target.to_string(),
+                                hr: hr.to_string(),
+                                timestamp,
+                                mined_blocks,
+                            };
+                            miners_map.entry(miner_str)
+                                .or_insert(Vec::new())
+                                .push(miner_info);
+                        }
+                    }
+                }
+            }
+        }
+    }
 
-	for item in db.iter() {
-		if let Ok((key, value)) = item {
-			let key_str = String::from_utf8_lossy(&key);
-
-			if key_str.starts_with("miner_") {
-				if let Ok(json) = serde_json::from_slice::<Value>(&value) {
-					if let (Some(miner), Some(id), Some(target), Some(hr), Some(timestamp)) = (
-						json["miner"].as_str(),
-						json["id"].as_str(),
-						json["target"].as_str(),
-						json["hr"].as_str(),
-						json["timestamp"].as_u64(),
-					) {
-						if now - timestamp as u128 <= (seconds * 1000) as u128 {
-							miners_map.entry(miner.to_string())
-								.or_insert(Vec::new())
-								.push(id.to_string());
-						}
-					}
-				}
-			}
-		}
-	}
-
-	miners_map
+    miners_map
 }

@@ -47,7 +47,7 @@ mod pokiohash;
 use pokiohash::*;
 mod pokiofunctions;
 use pokiofunctions::*;
-use pokiofunctions::Block;
+use pokiofunctions::{MinerInfo, Block};
 mod merkle;
 use merkle::*;
 mod balances;
@@ -55,7 +55,7 @@ use balances::*;
 mod nngutils;
 use nngutils::*;
 
-fn mine_block(coins: &str, miner: &str, nonce: &str) -> sled::Result<()> {	
+fn mine_block(coins: &str, miner: &str, nonce: &str, id: &str) -> sled::Result<()> {	
 	let result = (|| {
 		let mining_template = get_mining_template(&coins, &miner);
 		let mut modified_password = nonce.to_string();
@@ -173,6 +173,7 @@ fn mine_block(coins: &str, miner: &str, nonce: &str) -> sled::Result<()> {
 				eprintln!("Error saving block: {}", e);
 			} else {
 				add_block_to_history(new_block.height, new_block.timestamp, new_block.difficulty, 1);
+				save_mined_block(&mut new_block, id);
 			}
 		}
 		Ok(())
@@ -585,19 +586,40 @@ async fn main() -> sled::Result<()> {
 					let active_miners = count_active_miners(seconds);
 					let db = config::pooldb();
 					let mut result = vec![];
-
 					if let Some(workers) = active_miners.get(&miner.to_lowercase()) {
-						for id in workers {
-							let key = format!("miner_{}", id);
+						for worker in workers {
+							let mut worker_data = json!({
+								"hr": worker.hr,
+								"id": worker.id,
+								"miner": miner,
+								"target": worker.target,
+								"timestamp": worker.timestamp,
+								"mined_blocks": worker.mined_blocks,
+							});
+							let key = format!("miner_{}", worker.id);
 							if let Ok(Some(data)) = db.get(key) {
 								if let Ok(json_data) = serde_json::from_slice::<Value>(&data) {
-									result.push(json_data);
+									for (k, v) in json_data.as_object().unwrap_or(&serde_json::Map::new()) {
+										worker_data[k] = v.clone();
+									}
 								}
 							}
+							result.push(worker_data);
 						}
 					}
-
 					json!({ "jsonrpc": "2.0", "id": id, "result": result })
+				},
+				"getMinedBlocks" => {
+					let block_number = data["params"]
+						.get(0)
+						.and_then(|v| v.as_str())
+						.and_then(|s| s.parse::<usize>().ok())
+						.unwrap_or(0);
+
+					match get_blocks_paginated(50, block_number) {
+						Ok(blocks) => json!({"jsonrpc": "2.0", "id": id, "result": blocks}),
+						Err(e) => json!({"jsonrpc": "2.0", "id": id, "error": { "code": -32000, "message": e.to_string() }}),
+					}
 				},
 				"getPoolDifficulty" => {
 					let total_hr = sum_recent_difficulty(600, 1);
@@ -614,7 +636,7 @@ async fn main() -> sled::Result<()> {
 					let coins = data["coins"].as_str().unwrap_or("1000");
 					let miner = data["miner"].as_str().unwrap_or("");
 					let nonce = data["nonce"].as_str().unwrap_or("0000000000000000");
-					let _ = mine_block(coins, miner, nonce);
+					let _ = mine_block(coins, miner, nonce, id);
 					json!({"jsonrpc": "2.0", "id": id, "result": "ok"})
 				},
 				"putBlock" => {
@@ -649,6 +671,7 @@ async fn main() -> sled::Result<()> {
 										eprintln!("Error saving block: {}", e);
 										json!({"jsonrpc": "2.0", "id": id, "result": "error"})
 									} else {
+										add_block_to_history(new_block.height, new_block.timestamp, new_block.difficulty, 0);
 										json!({"jsonrpc": "2.0", "id": id, "result": "ok"})
 									}
 								}
