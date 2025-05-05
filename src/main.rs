@@ -39,6 +39,7 @@ use std::time::{Instant, Duration};
 use std::io::{self, BufRead};
 use std::process;
 use warp::filters::addr::remote;
+use tokio::time::{sleep, Duration as tDuration};
 
 mod config;
 mod constants;
@@ -217,7 +218,7 @@ async fn main() -> sled::Result<()> {
 		miningfee = pre_miningfee;
 	}
 	
-	let mut server_address = "62.113.200.176".to_string();
+	let mut server_address = "pokio.xyz".to_string();
 	if let Some(pos) = args.iter().position(|arg| arg == "--server") {
 		if let Some(addr) = args.get(pos + 1) {
 			server_address = addr.clone();
@@ -330,36 +331,58 @@ async fn main() -> sled::Result<()> {
 	print_log_message(format!("Starting sync..."), 1);
 	//-- sync at start
 	config::update_full_sync(1);
-	let _ = tokio::spawn(full_sync_blocks("62.113.200.176".to_string())).await.unwrap();
-	let _ = tokio::spawn(full_sync_blocks("207.180.213.141".to_string())).await.unwrap();
+
+	let servers = vec![
+		"node2.pokio.xyz".to_string(),
+		"node1.pokio.xyz".to_string(),
+		"pokio.xyz".to_string(),
+	];
+
+	//-- sync at start
+	config::update_full_sync(1);
+	for server in &servers {
+		print_log_message(format!("Syncing from {}", server), 4);
+		let _ = tokio::spawn(full_sync_blocks(server.clone())).await.unwrap();
+	}
 	config::update_full_sync(0);
-	print_log_message(format!("Sync ended. Starting server..."), 1);
-	
+	print_log_message("Sync ended. Starting server...".to_string(), 1);
+
 	if nng_mode == 0 {
-		print_log_message(format!("Starting NNG server..."), 1);
-		start_nng_server(vec![
-			"62.113.200.176".to_string(),
-			"207.180.213.141".to_string()
-		]);
+		print_log_message("Starting NNG server...".to_string(), 1);
+		start_nng_server(servers.clone());
+	}
+	
+	//tokio::spawn(async { let _ = connect_to_http_server("node1.pokio.xyz".to_string()); });
+
+
+	if http_mode == 0 {
+		//-- nng connect
+		for server in &servers {
+			let server = server.clone();
+			tokio::spawn(async {
+				let _ = connect_to_nng_server(server);
+			});
+		}
+
+		//-- http connect
+		for (i, server) in servers.iter().enumerate() {
+			let server = server.clone();
+			tokio::spawn(async {
+				sleep(tDuration::from_millis(1300));
+				let _ = connect_to_http_server(server);
+			});
+		}
+	} else {
+		//-- http connect
+		for (i, server) in servers.iter().enumerate() {
+			let server = server.clone();
+			tokio::spawn(async {
+				sleep(tDuration::from_millis(1300));
+				let _ = connect_to_http_server(server);
+			});
+		}
 	}
 
-	if http_mode == 0
-	{
-		//-- nng connect
-		tokio::spawn(async { let _ = connect_to_nng_server("62.113.200.176".to_string()); });
-		tokio::spawn(async { let _ = connect_to_nng_server("207.180.213.141".to_string()); });
-		//-- http connect
-		tokio::spawn(async { let _ = connect_to_http_server("62.113.200.176".to_string()); });
-		std::thread::sleep(std::time::Duration::from_millis(1300));
-		tokio::spawn(async { let _ = connect_to_http_server("207.180.213.141".to_string()); });
-	}
-	else
-	{
-		//-- http connect
-		tokio::spawn(async { let _ = connect_to_http_server("62.113.200.176".to_string()); });
-		std::thread::sleep(std::time::Duration::from_millis(1300));
-		tokio::spawn(async { let _ = connect_to_http_server("207.180.213.141".to_string()); });
-	}
 
 	
 	let rpc_route = warp::path("rpc")
@@ -696,7 +719,7 @@ async fn main() -> sled::Result<()> {
 
 async fn full_sync_blocks(pserver: String) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 	let client = Client::builder()
-		.timeout(Duration::from_secs(2))
+		.timeout(Duration::from_secs(5))
 		.build()
 		.expect("Failed to build HTTP client");
 	let rpc_url = format!("http://{}:30303/rpc", pserver);

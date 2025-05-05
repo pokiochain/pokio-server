@@ -998,6 +998,7 @@ pub fn count_active_miners(seconds: u64) -> HashMap<String, Vec<MinerInfo>> {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_millis();
+    let mut miningid_block_counts: HashMap<String, u64> = HashMap::new();
     for item in db.iter() {
         if let Ok((key, value)) = item {
             let key_str = String::from_utf8_lossy(&key);
@@ -1012,10 +1013,15 @@ pub fn count_active_miners(seconds: u64) -> HashMap<String, Vec<MinerInfo>> {
                     ) {
                         if now - timestamp as u128 <= (seconds * 1000) as u128 {
                             let miner_str = miner.to_string();
-                            let mined_blocks = match get_all_miningids_for_miner(miner) {
-                                Ok(mined_blocks_data) => mined_blocks_data.iter().map(|(_, count)| count).sum(),
-                                Err(_) => 0,
-                            };
+                            if !miningid_block_counts.contains_key(id) {
+                                if let Ok(mined_blocks_data) = get_all_miningids_for_miner(miner) {
+                                    for (miningid, count) in mined_blocks_data {
+                                        miningid_block_counts.insert(miningid, count);
+                                    }
+                                }
+                            }
+                            let mined_blocks = *miningid_block_counts.get(id).unwrap_or(&0);
+
                             let miner_info = MinerInfo {
                                 id: id.to_string(),
                                 target: target.to_string(),
@@ -1023,6 +1029,7 @@ pub fn count_active_miners(seconds: u64) -> HashMap<String, Vec<MinerInfo>> {
                                 timestamp,
                                 mined_blocks,
                             };
+
                             miners_map.entry(miner_str)
                                 .or_insert(Vec::new())
                                 .push(miner_info);

@@ -5,7 +5,8 @@ use nng::options::Options;
 use std::time::{Instant, Duration};
 use serde_json::json;
 use std::thread;
-
+use tokio::time::{interval, Duration as tDuration};
+use tokio::select;
 
 use crate::constants::*;
 use crate::config;
@@ -33,7 +34,9 @@ pub fn start_nng_server(ips: Vec<String>) {
 				.map(|ip| format!("http://{}:30303/rpc", ip))
 				.collect();
 
+			let mut ticker = interval(tDuration::from_millis(25));
 			loop {
+				ticker.tick().await;
 				if config::sync_status() == 0 && config::full_sync_status() == 0 {
 					let (actual_height, _actual_hash, _) = get_latest_block_info();
 					if actual_height != s_height {
@@ -185,7 +188,9 @@ pub fn connect_to_nng_server(pserver: String) -> Result<(), Box<dyn std::error::
 	thread::spawn(move || {
 		let rt = tokio::runtime::Runtime::new().unwrap();
 		rt.block_on(async move {
+			let mut ticker = interval(tDuration::from_millis(60000));
 			loop {
+				ticker.tick().await;
 				let socket = Socket::new(Protocol::Sub0).expect("Can't create NNG connection");
 				let _ = socket.set_opt::<Subscribe>(vec![]);
 				let nng_url = format!("tcp://{}:5555", pserver);
@@ -196,7 +201,9 @@ pub fn connect_to_nng_server(pserver: String) -> Result<(), Box<dyn std::error::
 				{
 					print_log_message(format!("Connected to {} NNG server", pserver), 1);
 					let mut last_mempool_check = Instant::now();
+					let mut bticker = interval(tDuration::from_millis(25));
 					loop {
+						bticker.tick().await;
 						if config::sync_status() == 0 && config::full_sync_status() == 0 {
 							if last_mempool_check.elapsed() >= Duration::from_secs(5) {
 								last_mempool_check = Instant::now();
@@ -290,17 +297,12 @@ pub fn connect_to_nng_server(pserver: String) -> Result<(), Box<dyn std::error::
 									
 								}
 								Err(e) => {
-									//eprintln!("Error receiving NNG message: {}", e);
-									thread::sleep(Duration::from_millis(10000));
 									continue;
 								}
 							}
 						}
-						thread::sleep(Duration::from_millis(25));
-						
 					}
 				}
-				thread::sleep(Duration::from_millis(60000));
 			}
 		});
 	});
@@ -462,12 +464,12 @@ pub fn connect_to_http_server(pserver: String) -> Result<(), Box<dyn std::error:
 						} else {
 							print_log_message(format!("Hash error on block {}: {} != {}", actual_height, hash, block_hash), 1);
 							config::update_full_sync(1);
-							fix_blockchain(actual_height - (FIX_BC_OFFSET * 10));
+							fix_blockchain(actual_height - FIX_BC_OFFSET);
 							config::update_full_sync(0);
 						}
 					} /*else {
 						print_log_message(format!("Hash error on block {}.", actual_height), 2);
-						//fix_blockchain(actual_height - (FIX_BC_OFFSET * 10));
+						//fix_blockchain(actual_height - FIX_BC_OFFSET);
 					}*/
 				}
 			}
