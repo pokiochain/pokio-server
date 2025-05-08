@@ -18,6 +18,7 @@ pub const COIN_DIFF: u64 = 2500000;
 pub const COIN_DIFF_2: u64 = 5000000;
 pub const COIN_DIFF_DELAY: u64 = 100;
 pub const MAX_COIN_DELAY: u64 = 10000;
+pub const CONTRACT_CREATOR: &str = "0x0000000000000000000000000000000000000000";
 pub const CHECKPOINTS: [Checkpoint; 9] = [
     Checkpoint { height: 5000, hash: "5dc59b4850c155832b29e490fb85db6735fc0777fc372ba90955e876aabc1267" },
     Checkpoint { height: 15000, hash: "82d7456b8587dcbb206d4d20f0fc5c9e118c7c79560a25caa97e254fe93cff9b" },

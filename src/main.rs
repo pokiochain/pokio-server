@@ -55,6 +55,8 @@ mod balances;
 use balances::*;
 mod nngutils;
 use nngutils::*;
+mod virtualmachine;
+use virtualmachine::*;
 
 fn mine_block(coins: &str, miner: &str, nonce: &str, id: &str) -> sled::Result<()> {	
 	let result = (|| {
@@ -382,6 +384,10 @@ async fn main() -> sled::Result<()> {
 			});
 		}
 	}
+	
+	let _ = tokio::spawn(async {
+		let _ = start_virtual_machine();
+	});
 
 
 	
@@ -396,6 +402,8 @@ async fn main() -> sled::Result<()> {
 			} else {
 				print_log_message("Request from unknown IP".to_string(), 2);
 			}
+			
+			print_log_message(format!("Received JSON: {}", data), 4);
 			
 			let id = data["id"].as_str().unwrap_or("unknown");
 			let method = data["method"].as_str().unwrap_or("");
@@ -429,9 +437,42 @@ async fn main() -> sled::Result<()> {
 				},
 				//get_mempool_records
 				"eth_chainId" => json!({"jsonrpc": "2.0", "id": id, "result": format!("0x{:x}", CHAIN_ID)}),
-				"eth_getCode" => json!({"jsonrpc": "2.0", "id": id, "result": "0x"}),
-				"eth_estimateGas" => json!({"jsonrpc": "2.0", "id": id, "result": "0x5208"}),
+				"eth_getCode" => json!({"jsonrpc": "2.0", "id": id, "result": "0x0000000000000000000000000000000000000000000000000000000000000000"}),
+				"eth_getStorageAt" => json!({"jsonrpc": "2.0", "id": id, "result": "0x1"}),
+				"eth_estimateGas" => {
+					/*let address = data["params"]
+						.get(0)
+						.and_then(|v| v.as_str())
+						.unwrap_or("");
+					if address.to_lowercase() == "0x0000000000000000000000000000000000000000" {
+						json!({"jsonrpc": "2.0", "id": id, "result": "0xfff5208"})
+					} else {*/
+						json!({"jsonrpc": "2.0", "id": id, "result": "0x5208"})
+					//}
+				},
 				"eth_gasPrice" => json!({"jsonrpc": "2.0", "id": id, "result": "0x27eda12b"}),
+				"eth_call" => {
+					if let Some(params) = data["params"].as_array() {
+						if let Some(call_obj) = params.get(0) {
+							let to = call_obj.get("to").and_then(|v| v.as_str()).unwrap_or_default();
+							let data_field = call_obj.get("data").and_then(|v| v.as_str()).unwrap_or_default();
+							match vm_process_eth_call(to, data_field) {
+								Ok(result) => { 
+									println!("{:?}", result);
+									println!("{:?}", json!({"jsonrpc": "2.0", "id": id, "result": result}));
+									json!({"jsonrpc": "2.0", "id": id, "result": result})
+								},
+								Err(e) => {
+									json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32000, "message": format!("VM processing error: {}", e) } })
+								}
+							}
+						} else {
+							json!({"jsonrpc": "2.0", "id": id, "error": { "code": -32602, "message": "Invalid params: expected call object" } })
+						}
+					} else {
+						json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32602, "message": "Invalid params: expected array" } })
+					}
+				},
 				"eth_getTransactionCount" => {
 					let address = data["params"]
 						.get(0)

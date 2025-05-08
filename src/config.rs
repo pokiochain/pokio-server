@@ -11,6 +11,7 @@ static ETH_ADDRESS: OnceLock<Address> = OnceLock::new();
 static DB: OnceLock<sled::Db> = OnceLock::new();
 static MEMPOOLDB: OnceLock<sled::Db> = OnceLock::new();
 static POOLDB: OnceLock<sled::Db> = OnceLock::new();
+static VMDB: OnceLock<sled::Db> = OnceLock::new();
 static SYNC_STATUS: OnceLock<AtomicUsize> = OnceLock::new();
 static FULL_SYNC_STATUS: OnceLock<AtomicUsize> = OnceLock::new();
 static TS_DIFF: OnceLock<AtomicI64> = OnceLock::new();
@@ -45,6 +46,9 @@ pub fn load_key() {
     
     let pooldb = sled::open("pool_db").expect("Failed to open mempool database");
     POOLDB.set(pooldb).expect("Mempool was already initialized");
+	
+	let vmdb = sled::open("vm_db").expect("Failed to open vm database");
+    VMDB.set(vmdb).expect("VM was already initialized");
 
     SYNC_STATUS.set(AtomicUsize::new(0)).expect("Sync status already initialized");
 	FULL_SYNC_STATUS.set(AtomicUsize::new(0)).expect("Full sync status already initialized");
@@ -77,6 +81,10 @@ pub fn mempooldb() -> &'static sled::Db {
 
 pub fn pooldb() -> &'static sled::Db {
     POOLDB.get().expect("Database not loaded")
+}
+
+pub fn vmdb() -> &'static sled::Db {
+    VMDB.get().expect("Database not loaded")
 }
 
 pub fn mining_fee() -> usize {
