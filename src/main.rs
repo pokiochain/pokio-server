@@ -440,23 +440,29 @@ async fn main() -> sled::Result<()> {
 				"eth_getCode" => json!({"jsonrpc": "2.0", "id": id, "result": "0x0000000000000000000000000000000000000000000000000000000000000000"}),
 				"eth_getStorageAt" => json!({"jsonrpc": "2.0", "id": id, "result": "0x1"}),
 				"eth_estimateGas" => {
-					/*let address = data["params"]
+					let to = data["params"]
 						.get(0)
+						.and_then(|v| v.get("to"))
 						.and_then(|v| v.as_str())
-						.unwrap_or("");
-					if address.to_lowercase() == "0x0000000000000000000000000000000000000000" {
-						json!({"jsonrpc": "2.0", "id": id, "result": "0xfff5208"})
-					} else {*/
-						json!({"jsonrpc": "2.0", "id": id, "result": "0x5208"})
-					//}
+						.unwrap_or("")
+						.to_lowercase();
+						
+					match vm_process_eth_call(&to, "type") {
+						Ok(result) => { 
+							json!({"jsonrpc": "2.0", "id": id, "result": "0x4ffff"})
+						},
+						Err(e) => {
+							json!({"jsonrpc": "2.0", "id": id, "result": "0x5208"})
+						}
+					}
 				},
 				"eth_gasPrice" => json!({"jsonrpc": "2.0", "id": id, "result": "0x27eda12b"}),
 				"eth_call" => {
 					if let Some(params) = data["params"].as_array() {
 						if let Some(call_obj) = params.get(0) {
-							let to = call_obj.get("to").and_then(|v| v.as_str()).unwrap_or_default();
+							let to = call_obj.get("to").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
 							let data_field = call_obj.get("data").and_then(|v| v.as_str()).unwrap_or_default();
-							match vm_process_eth_call(to, data_field) {
+							match vm_process_eth_call(&to, data_field) {
 								Ok(result) => { 
 									println!("{:?}", result);
 									println!("{:?}", json!({"jsonrpc": "2.0", "id": id, "result": result}));

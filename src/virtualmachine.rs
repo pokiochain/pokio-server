@@ -20,7 +20,14 @@ use crate::pokiofunctions::*;
 use crate::pokiofunctions::Block;
 
 pub const ERC20_SYMBOL_BYTES: &str = "0000000000000000000000000000000000000000000000000000000000000020";
-pub const LEN_4: &str = "0000000000000000000000000000000000000000000000000000000000000004";
+pub const VM_ZERO_24: &str = "000000000000000000000000";
+pub const ERC20_FN_CHECK_BALANCE: &str = "0x70a08231";
+pub const ERC20_FN_CHECK_NAME: &str = "0x06fdde03";
+pub const ERC20_FN_CHECK_SYMBOL: &str = "0x95d89b41";
+pub const ERC20_FN_CHECK_DECIMALS: &str = "0x313ce567";
+pub const ERC20_NON_MINABLE_CREATE: &str = "0xc0000001";
+pub const ERC20_MINABLE_CREATE: &str = "0xc0000002";
+
 
 pub fn vm_process_eth_call(to: &str, data: &str) -> Result<serde_json::Value, String> {
     let vmdb = config::vmdb();
@@ -33,13 +40,19 @@ pub fn vm_process_eth_call(to: &str, data: &str) -> Result<serde_json::Value, St
             Ok(serde_json::json!(format!("0x{}", hex_str)))
         },
         Ok(None) => {
-            if data.starts_with("0x70a08231") {
+            if data.starts_with(ERC20_FN_CHECK_BALANCE) {
                 return Ok(serde_json::json!("0x0000000000000000000000000000000000000000000000000000000000000000"));
             }
             Err("Method not found in storage".to_string())
         },
         Err(e) => Err(format!("Database error: {}", e)),
     }
+}
+
+fn encoded_string_length_hex64(hex: &str) -> String {
+    let bytes = hex::decode(hex).expect("Invalid hex string");
+    let null_pos = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+    format!("{:0>64}", format!("{:x}", null_pos))
 }
 
 
@@ -104,9 +117,9 @@ pub fn start_virtual_machine() {
 											if method == "0xa9059cbb" {
 												let vm_sender = sender_address.trim_start_matches("0x");
 												let hex_vm_sender = format!("{:0>64}", vm_sender);
-												let sender_balance_key = format!("{}:0x70a08231{}", address, hex_vm_sender);
+												let sender_balance_key = format!("{}:{}{}", address, ERC20_FN_CHECK_BALANCE, hex_vm_sender);
 												println!("{}", sender_balance_key);
-												let receiver_balance_key = format!("{}:0x70a08231{}", address, params[0]);
+												let receiver_balance_key = format!("{}:{}{}", address, ERC20_FN_CHECK_BALANCE, params[0]);
 												let big_int_amount = BigUint::parse_bytes(params[1].as_bytes(), 16).expect("Invalid hex string");
 												let mut sender_balance: BigUint;;
 												match vmdb.get(&sender_balance_key) {
@@ -163,22 +176,30 @@ pub fn start_virtual_machine() {
 											
 											if input_hex != "0x" {
 												let (method, params) = parse_tx_input(&input_hex);
-												if method == "0xc0000002" {
+												println!("{}", method);
+												if method == ERC20_MINABLE_CREATE || method == ERC20_NON_MINABLE_CREATE {
 													if params.len() == 4 {
 														let full_contract_hash = keccak256(&txhash);
 														let contract_hash = full_contract_hash[..40].to_string();
 														let info_key = format!("0x{}:type", contract_hash);
-														let info_value = "0xc0000002".to_string();
-														let name_key = format!("0x{}:0x06fdde03", contract_hash); // name()
+														let info_value = method;
+														let name_key = format!("0x{}:{}", contract_hash, ERC20_FN_CHECK_NAME);
 														let name = params[0].clone();
-														let name_value = format!("{}{}{}", ERC20_SYMBOL_BYTES, LEN_4, name);
-														let symbol_key = format!("0x{}:0x95d89b41", contract_hash); // symbol()
+														
+														let hex_len_name = encoded_string_length_hex64(&name);
+														
+														let name_value = format!("{}{}{}", ERC20_SYMBOL_BYTES, hex_len_name, name);
+														let symbol_key = format!("0x{}:{}", contract_hash, ERC20_FN_CHECK_SYMBOL);
 														let symbol = params[1].clone();
-														let symbol_value = format!("{}{}{}", ERC20_SYMBOL_BYTES, LEN_4, symbol);
-														let decimals_key = format!("0x{}:0x313ce567", contract_hash); // decimals()
+														
+														let hex_len_symbol = encoded_string_length_hex64(&symbol);
+														
+														let symbol_value = format!("{}{}{}", ERC20_SYMBOL_BYTES, hex_len_symbol, symbol);
+														let decimals_key = format!("0x{}:{}", contract_hash, ERC20_FN_CHECK_DECIMALS);
 														let decimals_value = params[2].clone();
 														let clean_sender = sender_address.strip_prefix("0x").unwrap_or(&sender_address);
-														let balance_key = format!("0x{}:0x70a08231000000000000000000000000{}", contract_hash, clean_sender); // balance
+														//let balance_method = "70a08231"; //ERC20_FN_CHECK_BALANCE[..8].to_string();
+														let balance_key = format!("0x{}:{}{}{}", contract_hash, ERC20_FN_CHECK_BALANCE, VM_ZERO_24, clean_sender);
 														let balance_value = params[3].clone();
 														println!("{}", balance_key);
 														let inserts = vec![
