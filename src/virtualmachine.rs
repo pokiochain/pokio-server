@@ -25,8 +25,8 @@ pub const ERC20_FN_CHECK_BALANCE: &str = "0x70a08231";
 pub const ERC20_FN_CHECK_NAME: &str = "0x06fdde03";
 pub const ERC20_FN_CHECK_SYMBOL: &str = "0x95d89b41";
 pub const ERC20_FN_CHECK_DECIMALS: &str = "0x313ce567";
-pub const ERC20_NON_MINABLE_CREATE: &str = "0xc0000001";
-pub const ERC20_MINABLE_CREATE: &str = "0xc0000002";
+pub const ERC20_NON_MINTABLE_CREATE: &str = "0xc0000001";
+pub const ERC20_MINTABLE_CREATE: &str = "0xc0000002";
 
 
 pub fn vm_process_eth_call(to: &str, data: &str) -> Result<serde_json::Value, String> {
@@ -177,7 +177,7 @@ pub fn start_virtual_machine() {
 											if input_hex != "0x" {
 												let (method, params) = parse_tx_input(&input_hex);
 												println!("{}", method);
-												if method == ERC20_MINABLE_CREATE || method == ERC20_NON_MINABLE_CREATE {
+												if method == ERC20_MINTABLE_CREATE || method == ERC20_NON_MINTABLE_CREATE {
 													if params.len() == 4 {
 														let full_contract_hash = keccak256(&txhash);
 														let contract_hash = full_contract_hash[..40].to_string();
