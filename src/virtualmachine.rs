@@ -32,7 +32,7 @@ pub const ERC20_MINTABLE_CREATE: &str = "0xc0000002";
 pub fn vm_process_eth_call(to: &str, data: &str) -> Result<serde_json::Value, String> {
     let vmdb = config::vmdb();
     let key = format!("{}:{}", to.to_lowercase(), data.to_lowercase());
-    println!("{}", key);
+    //println!("{}", key);
 
     match vmdb.get(key) {
         Ok(Some(value)) => {
@@ -75,6 +75,7 @@ fn parse_tx_input(input: &str) -> (String, Vec<String>) {
 pub fn start_virtual_machine() {
     thread::spawn(move || {
         let vmdb = config::vmdb();
+		let db = config::db();
         let rt = Runtime::new().unwrap();
 
         rt.block_on(async {
@@ -90,7 +91,7 @@ pub fn start_virtual_machine() {
             loop {
                 ticker.tick().await;
                 let (actual_height, _actual_hash, _) = get_latest_block_info();
-				let actual_vm_height = actual_height - UNLOCK_OFFSET;
+				let actual_vm_height = actual_height - UNLOCK_OFFSET - 1;
 				if actual_vm_height > vm_height {
 					for height in (vm_height + 1)..=actual_vm_height {
 						let block = get_block_as_json(height);
@@ -110,7 +111,7 @@ pub fn start_virtual_machine() {
 										if input_hex != "0x" && address != CONTRACT_CREATOR {
 											if tx.gas < EthersU256::from(300_000u64)
 											{
-												print_log_message(format!("VM Not enought gas: {:?}", tx.gas), 1);
+												print_log_message(format!("VM Not enought gas: {:?}", tx.gas), 2);
 												continue;
 											}
 											let (method, params) = parse_tx_input(&input_hex);
@@ -118,7 +119,7 @@ pub fn start_virtual_machine() {
 												let vm_sender = sender_address.trim_start_matches("0x");
 												let hex_vm_sender = format!("{:0>64}", vm_sender);
 												let sender_balance_key = format!("{}:{}{}", address, ERC20_FN_CHECK_BALANCE, hex_vm_sender);
-												println!("{}", sender_balance_key);
+												//println!("{}", sender_balance_key);
 												let receiver_balance_key = format!("{}:{}{}", address, ERC20_FN_CHECK_BALANCE, params[0]);
 												let big_int_amount = BigUint::parse_bytes(params[1].as_bytes(), 16).expect("Invalid hex string");
 												let mut sender_balance: BigUint;;
@@ -151,16 +152,21 @@ pub fn start_virtual_machine() {
 													let hex_sender_balance = format!("{:0>64}", final_sender_balance.to_str_radix(16));
 													let hex_receiver_balance = format!("{:0>64}", final_receiver_balance.to_str_radix(16));
 													match vmdb.insert(&sender_balance_key, hex_sender_balance.as_bytes()) {
-														Ok(_) => println!("Sender balance updated"),
-														Err(e) => println!("Error updating sender balance: {}", e),
+														Ok(_) => {} //println!("Sender balance updated"),
+														Err(e) => {} //println!("Error updating sender balance: {}", e),
 													}
 													match vmdb.insert(&receiver_balance_key, hex_receiver_balance.as_bytes()) {
-														Ok(_) => println!("Receiver balance updated"),
-														Err(e) => println!("Error updating receiver balance: {}", e),
+														Ok(_) => {} //println!("Receiver balance updated"),
+														Err(e) => {} //println!("Error updating receiver balance: {}", e),
 													}
 													let _ = vmdb.flush();
+													let _ = db.insert(tx_str, b"confirmed_evm_ok");
 													print_log_message(format!("{} : {}", hex_receiver_balance, hex_sender_balance), 1);
 													print_log_message(format!("{} -> {} : {}", vm_sender, params[0], big_int_amount), 1);
+													let _ = db.flush();
+												} else { 
+													let _ = db.insert(tx_str, b"confirmed_evm_error"); 
+													let _ = db.flush();
 												}
 											}
 											continue;

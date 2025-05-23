@@ -195,7 +195,7 @@ pub fn connect_to_nng_server(pserver: String) -> Result<(), Box<dyn std::error::
 				let _ = socket.set_opt::<Subscribe>(vec![]);
 				let nng_url = format!("tcp://{}:5555", pserver);
 				if socket.dial(&nng_url).is_err() {
-					print_log_message(format!("Can't connect to NNG server"), 1);
+					print_log_message(format!("Can't connect to NNG server"), 3);
 				}
 				else
 				{
@@ -462,9 +462,9 @@ pub fn connect_to_http_server(pserver: String) -> Result<(), Box<dyn std::error:
 						if block_hash == hash {
 							print_log_message(format!("Blockchain status: clean"), 4);
 						} else {
-							print_log_message(format!("Hash error on block {}: {} != {}", actual_height, hash, block_hash), 1);
+							print_log_message(format!("Block {} with hash: {} is orphan", actual_height, block_hash), 1);
 							config::update_full_sync(1);
-							fix_blockchain(actual_height - FIX_BC_OFFSET);
+							fix_blockchain(actual_height - 1);
 							config::update_full_sync(0);
 						}
 					} /*else {

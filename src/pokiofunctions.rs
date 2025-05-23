@@ -744,7 +744,7 @@ pub fn save_block_to_db(new_block: &mut Block, checkpoint: u8) -> Result<(), Box
 										print_log_message(format!("Invalid nonce: {}, expected: {}", tx.nonce, last_nonce + 1), 2);
 									}
 									let receipt_key = format!("receipt:{}", txhash.clone());
-									db.insert(receipt_key, tx_str.clone().as_bytes())?;
+									db.insert(receipt_key, tx_str.as_bytes())?;
 										
 									let (ah, _, _) = get_latest_block_info();
 									let txheight = ah + 1;
@@ -772,7 +772,7 @@ pub fn save_block_to_db(new_block: &mut Block, checkpoint: u8) -> Result<(), Box
 									print_log_message(format!("Invalid nonce: {}, expected: {}", tx.nonce, last_nonce + 1), 2);
 								}
 								let receipt_key = format!("receipt:{}", txhash.clone());
-								db.insert(receipt_key, tx_str.clone().as_bytes())?;
+								db.insert(receipt_key, tx_str.as_bytes())?;
 									
 								let (ah, _, _) = get_latest_block_info();
 								let txheight = ah + 1;
@@ -804,7 +804,7 @@ pub fn save_block_to_db(new_block: &mut Block, checkpoint: u8) -> Result<(), Box
 							}
 							_ => {}
 						}*/
-						match get_rawtx_status(tx_str.clone()) {
+						match get_rawtx_status(tx_str) {
 							Some(status) if status == "processed" => {
 								let _ = db.insert(tx_str, b"confirmed")?;
 								continue;
@@ -851,7 +851,7 @@ pub fn save_block_to_db(new_block: &mut Block, checkpoint: u8) -> Result<(), Box
 									}
 									
 									let receipt_key = format!("receipt:{}", txhash.clone());
-									db.insert(receipt_key, tx_str.clone().as_bytes())?;
+									db.insert(receipt_key, tx_str.as_bytes())?;
 									
 									let (ah, _, _) = get_latest_block_info();
 									let txheight = ah + 1;
