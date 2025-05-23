@@ -30,5 +30,5 @@ pub const CHECKPOINTS: [Checkpoint; 11] = [
 	Checkpoint { height: 222900, hash: "ee41684b5f172f01efdd5d2289eb05b6cc36ddcda2a5bb825c4ec69d80ac0e2d" },
 	Checkpoint { height: 279680, hash: "0fb1c2bf090452ca3ba3b3d5457b3253c5391983f7aecdc064c3c02c8d70d6d3" },
 	Checkpoint { height: 306665, hash: "e6b0a8cca31ae9edc1c1c0acdfd91f731e184ef6cdad22b2306750f26288d107" },
-	Checkpoint { height: 306665, hash: "c9a34be0e45c528b15cb285f494a856e44002510cefcaf75dc62013ae710cebe" },
+	Checkpoint { height: 396000, hash: "c9a34be0e45c528b15cb285f494a856e44002510cefcaf75dc62013ae710cebe" },
 ];
