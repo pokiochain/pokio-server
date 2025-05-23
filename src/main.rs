@@ -28,6 +28,7 @@ use serde_json::Value;
 use num_traits::Zero;
 use std::cmp::max; 
 use nng::{Socket, Protocol};
+use std::sync::{Arc, Mutex};
 use reqwest::Client;
 use sled::IVec;
 use nng::options::protocol::pubsub::Subscribe;
@@ -608,12 +609,18 @@ async fn main() -> sled::Result<()> {
 			};
 			warp::reply::json(&response)
 		});
-		
+	
+	type CacheKey = (u64, String, String);
+	type MiningCache = Arc<Mutex<HashMap<CacheKey, String>>>;
+
+	let mining_cache: MiningCache = Arc::new(Mutex::new(HashMap::new()));
+	let cache = mining_cache.clone();
+	
 	let mining_route = warp::path("mining")
 		.and(warp::post())
 		.and(remote())
 		.and(warp::body::json())
-		.map(|addr: Option<std::net::SocketAddr>, data: serde_json::Value| {
+		.map(move |addr: Option<std::net::SocketAddr>, data: serde_json::Value| {
 			
 			if let Some(addr) = addr {
 				print_log_message(format!("Request from IP: {}", addr.ip()), 2);
@@ -625,13 +632,37 @@ async fn main() -> sled::Result<()> {
 			let method = data["method"].as_str().unwrap_or("");
 			let response = match method {
 				"getMiningTemplate" => {
+					let (actual_height, _, _) = get_latest_block_info();
 					let coins = data["coins"].as_str().unwrap_or("1000");
 					let miner = data["miner"].as_str().unwrap_or("");
 					let hr = data["hr"].as_str().unwrap_or("");
-					let mining_template = get_mining_template(coins, miner);
-					save_miner(&miner.to_lowercase(), id, coins, hr);
-					let seconds = 600;
-					let _active_miners = count_active_miners(seconds);
+
+					let key = (actual_height, coins.to_string(), miner.to_string());
+					
+					{
+						let mut guard = cache.lock().unwrap();
+						guard.retain(|(height, _, _), _| *height >= actual_height);
+					}
+
+					let cached_template = {
+						let guard = cache.lock().unwrap();
+						guard.get(&key).cloned()
+					};
+
+					let mining_template: String = match cached_template {
+						Some(template) => { 
+							print_log_message(format!("Cache"), 1);
+							template
+						}
+						None => {
+							print_log_message(format!("No cache"), 1);
+							let new_template = get_mining_template(coins, miner);
+							cache.lock().unwrap().insert(key, new_template.clone());
+							save_miner(&miner.to_lowercase(), id, coins, hr);
+							new_template
+						}
+					};
+
 					json!({"jsonrpc": "2.0", "id": id, "result": mining_template})
 				},
 				"getMinersCount" => {
