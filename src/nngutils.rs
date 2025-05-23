@@ -464,7 +464,7 @@ pub fn connect_to_http_server(pserver: String) -> Result<(), Box<dyn std::error:
 						} else {
 							print_log_message(format!("Block {} with hash: {} is orphan", actual_height, block_hash), 1);
 							config::update_full_sync(1);
-							fix_blockchain(actual_height - 1);
+							fix_blockchain(actual_height - FIX_BC_OFFSET);
 							config::update_full_sync(0);
 						}
 					} /*else {
