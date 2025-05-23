@@ -399,9 +399,9 @@ async fn main() -> sled::Result<()> {
 		.map(|addr: Option<std::net::SocketAddr>, data: serde_json::Value| {
 			
 			if let Some(addr) = addr {
-				print_log_message(format!("Request from IP: {}", addr.ip()), 2);
+				print_log_message(format!("Request from IP: {}", addr.ip()), 4);
 			} else {
-				print_log_message("Request from unknown IP".to_string(), 2);
+				print_log_message("Request from unknown IP".to_string(), 4);
 			}
 			
 			print_log_message(format!("Received JSON: {}", data), 4);
@@ -623,9 +623,9 @@ async fn main() -> sled::Result<()> {
 		.map(move |addr: Option<std::net::SocketAddr>, data: serde_json::Value| {
 			
 			if let Some(addr) = addr {
-				print_log_message(format!("Request from IP: {}", addr.ip()), 2);
+				print_log_message(format!("Request from IP: {}", addr.ip()), 4);
 			} else {
-				print_log_message("Request from unknown IP".to_string(), 2);
+				print_log_message("Request from unknown IP".to_string(), 4);
 			}
 			
 			let id = data["id"].as_str().unwrap_or("unknown");
@@ -651,11 +651,9 @@ async fn main() -> sled::Result<()> {
 
 					let mining_template: String = match cached_template {
 						Some(template) => { 
-							print_log_message(format!("Cache"), 1);
 							template
 						}
 						None => {
-							print_log_message(format!("No cache"), 1);
 							let new_template = get_mining_template(coins, miner);
 							cache.lock().unwrap().insert(key, new_template.clone());
 							save_miner(&miner.to_lowercase(), id, coins, hr);
