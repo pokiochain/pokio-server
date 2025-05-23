@@ -161,8 +161,8 @@ pub fn start_virtual_machine() {
 													}
 													let _ = vmdb.flush();
 													let _ = db.insert(tx_str, b"confirmed_evm_ok");
-													print_log_message(format!("{} : {}", hex_receiver_balance, hex_sender_balance), 1);
-													print_log_message(format!("{} -> {} : {}", vm_sender, params[0], big_int_amount), 1);
+													print_log_message(format!("{} : {}", hex_receiver_balance, hex_sender_balance), 4);
+													print_log_message(format!("{} -> {} : {}", vm_sender, params[0], big_int_amount), 4);
 													let _ = db.flush();
 												} else { 
 													let _ = db.insert(tx_str, b"confirmed_evm_error"); 
@@ -175,14 +175,14 @@ pub fn start_virtual_machine() {
 										if address == CONTRACT_CREATOR {
 											if tx.gas < EthersU256::from(2_000_000u64)
 											{
-												print_log_message(format!("VM Not enought gas: {:?}", tx.gas), 1);
+												print_log_message(format!("VM Not enought gas: {:?}", tx.gas), 2);
 												continue;
 											}
-											print_log_message(format!("VM contract creation started"), 1);
+											print_log_message(format!("VM contract creation started"), 2);
 											
 											if input_hex != "0x" {
 												let (method, params) = parse_tx_input(&input_hex);
-												println!("{}", method);
+												//println!("{}", method);
 												if method == ERC20_MINTABLE_CREATE || method == ERC20_NON_MINTABLE_CREATE {
 													if params.len() == 4 {
 														let full_contract_hash = keccak256(&txhash);
@@ -207,7 +207,7 @@ pub fn start_virtual_machine() {
 														//let balance_method = "70a08231"; //ERC20_FN_CHECK_BALANCE[..8].to_string();
 														let balance_key = format!("0x{}:{}{}{}", contract_hash, ERC20_FN_CHECK_BALANCE, VM_ZERO_24, clean_sender);
 														let balance_value = params[3].clone();
-														println!("{}", balance_key);
+														//println!("{}", balance_key);
 														let inserts = vec![
 															(info_key, info_value),
 															(symbol_key, symbol_value),
@@ -217,10 +217,10 @@ pub fn start_virtual_machine() {
 														];
 														for (key, value) in inserts {
 															if let Err(e) = vmdb.insert(key, value.as_bytes()) {
-																print_log_message(format!("Error inserting into DB: {}", e), 1);
+																print_log_message(format!("Error inserting into DB: {}", e), 2);
 															}
 														}
-														print_log_message(format!("Contract created: 0x{}", contract_hash), 1);
+														print_log_message(format!("Contract created: 0x{}", contract_hash), 2);
 														let _ = vmdb.flush();
 													}
 												}
