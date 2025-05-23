@@ -283,7 +283,7 @@ async fn main() -> sled::Result<()> {
 
 			match parts[0] {
 				"version" => {
-					println!("Pokio server 0.1.5");
+					println!("Pokio server 0.1.7");
 				}
 				"help" => {
 					println!("Available commands:");

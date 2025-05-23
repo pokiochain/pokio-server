@@ -411,7 +411,7 @@ pub fn get_16th_block() -> Option<Block> {
 			if let Some(block_data) = db.get(&block_key).unwrap() {
 				let block: Block = bincode::deserialize(&block_data).unwrap();
 
-				if i == 15 {
+				if i == UNLOCK_OFFSET - 1 {
 					return Some(block);
 				}
 
