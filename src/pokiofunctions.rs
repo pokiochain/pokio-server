@@ -29,7 +29,7 @@ use chrono::Local;
 use std::collections::VecDeque;
 use std::sync::Mutex;
 use once_cell::sync::Lazy;
-
+use num_traits::ToPrimitive;
 
 use crate::constants::*;
 use crate::merkle::*;
@@ -82,7 +82,7 @@ pub fn add_block_to_history(height: u64, timestamp: u64, difficulty: u64, is_loc
 }
 
 pub fn sum_recent_difficulty(seconds: u64, is_local_filter: u8) -> u64 {
-    let now = SystemTime::now()
+    let _now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("Time went backwards")
         .as_secs();
@@ -113,7 +113,7 @@ pub fn keccak256(data: &str) -> String {
 }
 
 pub fn calculate_diff(coins: u64, actual_height: u64) -> u64 {
-	if actual_height <= UNLOCK_OFFSET {
+	if actual_height <= PREMINE_BLOCKS {
 		coins
 	}
 	else if actual_height >= UPDATE_1_HEIGHT {
@@ -124,6 +124,16 @@ pub fn calculate_diff(coins: u64, actual_height: u64) -> u64 {
 	{
 		let result = max(1, (4.0 - (coins as f64).log(10.0).ceil()) as u64);
 		coins * (COIN_DIFF * result)
+	}
+}
+
+pub fn calculate_rx_diff(coins: u64, actual_height: u64) -> u64 {
+	if actual_height <= PREMINE_BLOCKS {
+		coins
+	}
+	else {
+		if coins < MAX_COIN_DELAY { coins * (COIN_DIFF_RX - ( coins * COIN_DIFF_DELAY) ) }
+		else { coins * (COIN_DIFF_RX - ( MAX_COIN_DELAY * COIN_DIFF_DELAY) ) }
 	}
 }
 
@@ -264,7 +274,7 @@ pub fn decode_transaction(raw_tx_hex: &str) -> Result<Transaction> {
 	}
 }
 
-fn generate_reward_tx(
+pub fn generate_reward_tx(
 	private_key: &str,
 	nonce: u64,
 	miner_address: &str,
@@ -502,7 +512,7 @@ pub fn get_rawtx_status(rawtx: &str) -> Option<String> {
 	Some(txs_str)
 }
 
-pub fn get_receipt_info(txhash: &str) -> Option<(String, u64)> {
+pub fn get_receipt_info(_txhash: &str) -> Option<(String, u64)> {
 	/*let db = config::db();
 	let receipt_key = format!("receipt:{}", txhash);
 	let receiptblock_key = format!("receiptblock:{}", txhash);
@@ -604,6 +614,44 @@ pub fn store_raw_transaction(raw_tx: String) -> String {
 	}
 }
 
+pub fn difficulty_to_target(difficulty: u64) -> String {
+    let max_target = 0xffff_ffff_u64;
+    let target = max_target / difficulty;
+    let target_bytes = target.to_le_bytes();
+    hex::encode(&target_bytes[..4])
+}
+
+pub fn compute_randomx_hash(blob_hex: &str, nonce_hex: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    let mut blob = hex::decode(blob_hex)?;
+    let nonce_bytes = hex::decode(nonce_hex)?;
+    if nonce_bytes.len() != 4 {
+        return Err("Invalid nonce".into());
+    }
+    if blob.len() < 43 {
+        return Err("Invalid blob".into());
+    }
+    blob[39..43].copy_from_slice(&nonce_bytes);
+    let hash = config::with_vm(|vm| vm.calculate_hash(&blob))?;
+    Ok(hex::encode(hash))
+}
+
+pub fn rx_hash_to_difficulty(hash_hex: &str) -> Result<u64, Box<dyn std::error::Error>> {
+    let hash_bytes = hex::decode(hash_hex)?;
+    if hash_bytes.len() != 32 {
+        return Err("Invalid hash".into());
+    }
+    let mut reversed_bytes = hash_bytes.clone();
+    reversed_bytes.reverse();
+    let hash_num = BigUint::from_bytes_be(&reversed_bytes);
+    let base_diff = BigUint::from_bytes_be(&[0xff; 32]);
+    let hash_diff = if hash_num.is_zero() {
+        BigUint::zero()
+    } else {
+        &base_diff / hash_num
+    };
+    Ok(hash_diff.to_u64().unwrap_or(u64::MAX))
+}
+
 pub fn save_block_to_db(new_block: &mut Block, checkpoint: u8) -> Result<(), Box<dyn Error>> {
 	
 	if config::async_status() == 0
@@ -641,7 +689,9 @@ pub fn save_block_to_db(new_block: &mut Block, checkpoint: u8) -> Result<(), Box
 				}
 				
 				let c_difficulty = calculate_diff(new_block.block_reward, actual_height);
-				if c_difficulty != new_block.difficulty {
+				let rx_difficulty = calculate_rx_diff(new_block.block_reward, actual_height);
+				
+				if c_difficulty != new_block.difficulty && rx_difficulty != new_block.difficulty {
 					return Err(format!(
 						"Difficulty mismatch at block {}: expected {}, got {}",
 						new_block.height, c_difficulty, new_block.difficulty
@@ -670,16 +720,63 @@ pub fn save_block_to_db(new_block: &mut Block, checkpoint: u8) -> Result<(), Box
 				let tx_parts: Vec<&str> = new_block.transactions.split('-').collect();
 				let first_two_txs = tx_parts.iter().take(2).cloned().collect::<Vec<&str>>().join("-");
 				
-				let mining_template = format!("{}-{}-{}-{}-{}-{}-{}", new_block.nonce, new_block.block_reward, 
-					diff_hex, new_block.height, new_block.prev_hash, new_block.miner, first_two_txs).to_lowercase();
-				let mining_hash = pokiohash_hash(&mining_template, &new_block.nonce);
-				let mining_difficulty = hash_to_difficulty(&mining_hash) as U256;
-				
-				if new_block.height > UPDATE_2_HEIGHT && mining_difficulty < c_difficulty.into() {
+				if new_block.difficulty == rx_difficulty && new_block.height <= UPDATE_RX_HEIGHT {
 					return Err(format!(
-						"Difficulty mismatch for block {}: expected {}, got {}",
-						new_block.height, c_difficulty, mining_difficulty
+						"Invalid algorithm: RANDOMX"
 					).into());
+				}
+				
+				if new_block.difficulty == rx_difficulty && new_block.height > UPDATE_RX_HEIGHT {
+					let ts_hex = format!("{:010x}", ts);
+					let target = difficulty_to_target(new_block.difficulty);
+					let rx_first_two_txs = tx_parts.iter().take(2).cloned().collect::<Vec<&str>>().join("0000000000000000");
+					let rx_blob = format!(
+						"0101{}{}0000000001{}{}",
+						ts_hex,
+						prev_hash,
+						target,
+						rx_first_two_txs
+					);
+					let rx_hashdiff: u64;
+					match compute_randomx_hash(&rx_blob, &new_block.nonce) {
+						Ok(calculated_hash) => {
+							match rx_hash_to_difficulty(&calculated_hash) {
+								Ok(difficulty) => {rx_hashdiff = difficulty; },
+								Err(_e) => {
+									rx_hashdiff = 0;
+								},
+							}
+						}
+						Err(_) => { rx_hashdiff = 0; }
+					}
+					
+					if rx_hashdiff < rx_difficulty {
+						return Err(format!(
+							"Difficulty mismatch for block {}: expected {}, got {}",
+							new_block.height, rx_difficulty, rx_hashdiff
+						).into());
+					}
+				}
+				
+				if new_block.difficulty == c_difficulty && new_block.height > UPDATE_3_HEIGHT {
+					return Err(format!(
+						"Invalid algorithm: BALLOON"
+					).into());
+				}
+				
+				if new_block.difficulty == c_difficulty && new_block.height > UPDATE_2_HEIGHT {
+					
+					let mining_template = format!("{}-{}-{}-{}-{}-{}-{}", new_block.nonce, new_block.block_reward, 
+						diff_hex, new_block.height, new_block.prev_hash, new_block.miner, first_two_txs).to_lowercase();
+					let mining_hash = pokiohash_hash(&mining_template, &new_block.nonce);
+					let mining_difficulty = hash_to_difficulty(&mining_hash) as U256;
+					
+					if mining_difficulty < c_difficulty.into() {
+						return Err(format!(
+							"Difficulty mismatch for block {}: expected {}, got {}",
+							new_block.height, c_difficulty, mining_difficulty
+						).into());
+					}
 				}
 			
 				/*let unsigned_serialized_block = serde_json::to_string_pretty(&new_block).unwrap();
@@ -722,7 +819,7 @@ pub fn save_block_to_db(new_block: &mut Block, checkpoint: u8) -> Result<(), Box
 							let last_nonce = get_last_nonce(&sender_address, 0);
 							if new_block.height > UPDATE_2_HEIGHT {
 								if tx.nonce == EthersU256::from(last_nonce + 1) {
-									if let Err(e) = update_balance(&sender_address, &total_deducted, 1) {
+									if let Err(_e) = update_balance(&sender_address, &total_deducted, 1) {
 										//eprintln!("Error in transaction: {}", e);
 										let _ = db.insert(tx_str, b"error")?;
 									} else {
@@ -752,7 +849,7 @@ pub fn save_block_to_db(new_block: &mut Block, checkpoint: u8) -> Result<(), Box
 									db.insert(receipt_key, &txheight.to_be_bytes())?;
 								}
 							} else {
-								if let Err(e) = update_balance(&sender_address, &total_deducted, 1) {
+								if let Err(_e) = update_balance(&sender_address, &total_deducted, 1) {
 									//eprintln!("Error in transaction: {}", e);
 									let _ = db.insert(tx_str, b"error")?;
 								} else {
@@ -836,7 +933,7 @@ pub fn save_block_to_db(new_block: &mut Block, checkpoint: u8) -> Result<(), Box
 									let _ = db.insert(tx_str, b"confirmed")?;
 								}
 								else {
-									if let Err(e) = update_balance(&sender_address, &total_deducted, 1) {
+									if let Err(_e) = update_balance(&sender_address, &total_deducted, 1) {
 										//eprintln!("Error in transaction: {}", e);
 										let _ = db.insert(tx_str, b"confirmed_with_error")?;
 									} else {

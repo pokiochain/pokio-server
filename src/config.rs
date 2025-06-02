@@ -6,6 +6,10 @@ use std::str::FromStr;
 use std::sync::{Mutex, OnceLock, atomic::{AtomicI64, AtomicU64, AtomicU8, AtomicUsize, Ordering}};
 use sled;
 
+use once_cell::unsync::Lazy; // Nota: usamos `unsync`, no `sync`
+use randomx_rs::{RandomXFlag, RandomXCache, RandomXVM};
+use std::cell::RefCell;
+
 static PKEY: OnceLock<String> = OnceLock::new();
 static ETH_ADDRESS: OnceLock<Address> = OnceLock::new();
 static DB: OnceLock<sled::Db> = OnceLock::new();
@@ -21,6 +25,19 @@ static ACTUAL_HASH: OnceLock<Mutex<String>> = OnceLock::new();
 static ACTUAL_TIMESTAMP: OnceLock<AtomicU64> = OnceLock::new();
 static LOG_LEVEL: OnceLock<AtomicU64> = OnceLock::new();
 static ASYNC: OnceLock<AtomicU8> = OnceLock::new();
+
+thread_local! {
+    static THREAD_VM: Lazy<RefCell<RandomXVM>> = Lazy::new(|| {
+        let key_hex = "b38737d8f08e1b0b033611bb268bd79b236c3089a756b79906eff085c67a7e31";
+        let key = hex::decode(key_hex).expect("clave inválida");
+
+        let flags = RandomXFlag::FLAG_DEFAULT | RandomXFlag::FLAG_JIT | RandomXFlag::FLAG_HARD_AES;
+        let cache = RandomXCache::new(flags, &key).expect("fallo al crear cache");
+        let vm = RandomXVM::new(flags, Some(cache), None).expect("fallo al crear VM");
+
+        RefCell::new(vm)
+    });
+}
 
 #[derive(Deserialize)]
 struct KeyFile {
@@ -199,4 +216,14 @@ pub fn update_actual_timestamp(value: u64) {
     } else {
         panic!("Actual timestamp not initialized");
     }
+}
+
+pub fn with_vm<F, R>(f: F) -> R
+where
+    F: FnOnce(&mut RandomXVM) -> R,
+{
+    THREAD_VM.with(|cell| {
+        let mut vm = cell.borrow_mut();
+        f(&mut vm)
+    })
 }

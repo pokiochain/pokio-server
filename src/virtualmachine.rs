@@ -91,7 +91,12 @@ pub fn start_virtual_machine() {
             loop {
                 ticker.tick().await;
                 let (actual_height, _actual_hash, _) = get_latest_block_info();
-				let actual_vm_height = actual_height - UNLOCK_OFFSET - 1;
+				let actual_vm_height;
+				if actual_height > vm_height {
+					actual_vm_height = actual_height - UNLOCK_OFFSET - 1;
+				} else {
+					actual_vm_height = 0;
+				}
 				if actual_vm_height > vm_height {
 					for height in (vm_height + 1)..=actual_vm_height {
 						let block = get_block_as_json(height);
