@@ -168,7 +168,6 @@ pub async fn broadcast_new_job(state: &SharedState, height: u64, hash: String, t
     for mut entry in state.iter_mut() {
         let job_state = entry.value_mut();
         let coins = job_state.coins;
-		let extra_data: String = job_state.worker_id.replace("-", "")[..4].to_lowercase();
 		let (ah, _, _) = get_latest_block_info();
         let difficulty = calculate_rx_diff(coins, ah);
         let target = difficulty_to_target(difficulty);
@@ -183,8 +182,7 @@ pub async fn broadcast_new_job(state: &SharedState, height: u64, hash: String, t
         let fee_raw_tx = generate_reward_tx(config::pkey(), nonce, &signer, fee_reward_amount).unwrap_or_default();
 
         let blob = format!(
-            "{}{}{}0000000001{}{}0000000000000000{}",
-			extra_data,
+            "0101{}{}0000000001{}{}0000000000000000{}",
             ts_hex,
             hash,
             target,
@@ -297,10 +295,7 @@ pub async fn handle_connection(mut socket: TcpStream, state: SharedState) -> Res
 							continue;
 						}
 						let (actual_height, actual_hash, actual_ts) = get_latest_block_info();
-						let worker_uuid = Uuid::new_v4();
-						let worker_id = worker_uuid.to_string();
-						let extra_data: String = worker_uuid.simple().to_string()[..4].to_lowercase();
-
+						let worker_id = Uuid::new_v4().to_string();
 						let job_id = Uuid::new_v4().to_string();
 						let coins = 50;
 						let difficulty: u64 = calculate_rx_diff(coins, actual_height);
@@ -340,8 +335,7 @@ pub async fn handle_connection(mut socket: TcpStream, state: SharedState) -> Res
 						}
 						
 						let blob = format!(
-							"{}{}{}0000000001{}{}0000000000000000{}",
-							extra_data,
+							"0101{}{}0000000001{}{}0000000000000000{}",
 							ts_hex,
 							actual_hash,
 							target,
@@ -442,8 +436,7 @@ pub async fn handle_connection(mut socket: TcpStream, state: SharedState) -> Res
 										let response_text = serde_json::to_string(&response)? + "\n";
 										let mut writer = job_state.writer.lock().await;
 										writer.write_all(response_text.as_bytes()).await?;
-										let extra_data: String = job_state.worker_id.replace("-", "")[..4].to_lowercase();
-										let _ = mine_block(&job_state.coins.to_string(), &job_state.miner, nonce, worker_id, 2, &extra_data);
+										let _ = mine_block(&job_state.coins.to_string(), &job_state.miner, nonce, worker_id, 2);
 									}
 									else {
 										let status = "ERROR";
@@ -478,7 +471,6 @@ pub async fn handle_connection(mut socket: TcpStream, state: SharedState) -> Res
 							if let Some(mut job_state) = state.get_mut(worker_id) {
 								if coins > 0 { //job_state.coins != coins {
 									job_state.coins = coins;
-									let extra_data: String = job_state.worker_id.replace("-", "")[..4].to_lowercase();
 									
 									job_state.difficulty = difficulty;
 									job_state.target = target.clone();
@@ -502,8 +494,7 @@ pub async fn handle_connection(mut socket: TcpStream, state: SharedState) -> Res
 									let fee_raw_tx = generate_reward_tx(config::pkey(), nonce, &signer, fee_reward_amount).unwrap_or_default();
 
 									let blob = format!(
-										"{}{}{}0000000001{}{}0000000000000000{}",
-										extra_data,
+										"0101{}{}0000000001{}{}0000000000000000{}",
 										ts_hex,
 										actual_hash,
 										target,
@@ -565,7 +556,7 @@ pub async fn handle_connection(mut socket: TcpStream, state: SharedState) -> Res
     Ok(())
 }
 
-fn mine_block(coins: &str, miner: &str, nonce: &str, id: &str, algo: u64, extra_data: &str) -> sled::Result<()> {	
+fn mine_block(coins: &str, miner: &str, nonce: &str, id: &str, algo: u64) -> sled::Result<()> {	
 	let result = (|| {
 		let mining_template = get_mining_template(&coins, &miner);
 		let mut modified_password = nonce.to_string();
@@ -625,7 +616,7 @@ fn mine_block(coins: &str, miner: &str, nonce: &str, id: &str, algo: u64, extra_
 				state_root: "".to_string(),
 				receipts_root: "".to_string(),
 				logs_bloom: "".to_string(),
-				extra_data: extra_data.to_string(),
+				extra_data: "".to_string(),
 				version: 1,
 				signature: "".to_string(),
 			};
@@ -1279,7 +1270,7 @@ async fn main() -> sled::Result<()> {
 					let coins = data["coins"].as_str().unwrap_or("1000");
 					let miner = data["miner"].as_str().unwrap_or("");
 					let nonce = data["nonce"].as_str().unwrap_or("0000000000000000");
-					let _ = mine_block(coins, miner, nonce, id, 1, "");
+					let _ = mine_block(coins, miner, nonce, id, 1);
 					json!({"jsonrpc": "2.0", "id": id, "result": "ok"})
 				},
 				"putBlock" => {
