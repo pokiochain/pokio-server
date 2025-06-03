@@ -733,13 +733,25 @@ pub fn save_block_to_db(new_block: &mut Block, checkpoint: u8) -> Result<(), Box
 					let ts_hex = format!("{:010x}", ts);
 					let target = difficulty_to_target(new_block.difficulty);
 					let rx_first_two_txs = tx_parts.iter().take(2).cloned().collect::<Vec<&str>>().join("0000000000000000");
-					let rx_blob = format!(
-						"0101{}{}0000000001{}{}",
-						ts_hex,
-						prev_hash,
-						target,
-						rx_first_two_txs
-					);
+					let rx_blob = match new_block.extra_data.len() {
+						0..=3 => format!(
+							"0101{}{}0000000001{}{}",
+							ts_hex,
+							prev_hash,
+							target,
+							rx_first_two_txs
+						),
+						4 => format!(
+							"{}{}{}0000000001{}{}",
+							new_block.extra_data,
+							ts_hex,
+							prev_hash,
+							target,
+							rx_first_two_txs
+						),
+						_ => new_block.extra_data.clone(),
+					};
+
 					let mut rx_hashdiff = 0;
 
 					if let Ok(mut stream) = nTcpStream::connect("127.0.0.1:6789") {
