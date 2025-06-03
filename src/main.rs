@@ -47,6 +47,8 @@ use dashmap::DashMap;
 use uuid::Uuid;
 use tokio::sync::{Mutex as tMutex};
 use num_traits::{One, Zero, ToPrimitive};
+use std::io::{BufReader as iBufReader, Write as iWrite};
+use std::net::{TcpListener as nTcpListener, TcpStream as nTcpStream};
 
 mod config;
 mod constants;
@@ -87,6 +89,56 @@ type SharedState = Arc<DashMap<String, JobState>>;
 
 static HOST: &str = "0.0.0.0";
 static PORT: u16 = 3333;
+
+pub fn start_local_hash_server() -> std::io::Result<()> {
+    let listener = nTcpListener::bind("127.0.0.1:6789")?;
+    println!("RandomX hash server listening on 127.0.0.1:6789");
+
+    for stream in listener.incoming() {
+        match stream {
+            Ok(stream) => {
+                handle_hash_connection(stream);
+            }
+            Err(e) => {
+                eprintln!("Error accepting connection: {}", e);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn handle_hash_connection(mut stream: nTcpStream) {
+    let peer = stream.peer_addr().unwrap_or_else(|_| "unknown".parse().unwrap());
+    println!("Accepted connection from {}", peer);
+
+    let mut reader = iBufReader::new(stream.try_clone().unwrap());
+    let mut request_line = String::new();
+
+    if reader.read_line(&mut request_line).is_ok() {
+        if let Ok(json_req) = serde_json::from_str::<Value>(&request_line) {
+            let blob = json_req["blob"].as_str().unwrap_or("");
+            let nonce = json_req["nonce"].as_str().unwrap_or("");
+
+            let response = match compute_randomx_hash(blob, nonce) {
+                Ok(hash) => json!({
+                    "status": "ok",
+                    "hash": hash,
+                }),
+                Err(e) => json!({
+                    "status": "error",
+                    "message": e.to_string(),
+                }),
+            };
+
+            let response_text = serde_json::to_string(&response).unwrap() + "\n";
+            let _ = stream.write_all(response_text.as_bytes());
+        } else {
+            let _ = stream.write_all(b"{\"status\":\"error\",\"message\":\"invalid json\"}\n");
+        }
+    }
+}
+
 
 pub async fn start_block_monitor(state: SharedState) {
     tokio::spawn(async move {
@@ -341,23 +393,37 @@ pub async fn handle_connection(mut socket: TcpStream, state: SharedState) -> Res
 
                             if let Some(mut job_state) = state.get_mut(worker_id) {
 								
-								let hashdiff: u64;
-								
-								match compute_randomx_hash(&job_state.blob, nonce) {
-									Ok(calculated_hash) => {
-										match rx_hash_to_difficulty(&calculated_hash) {
-										Ok(difficulty) => {hashdiff = difficulty; },
-											Err(_e) => {
-												hashdiff = 0;
-											},
+								let mut hashdiff = 0;
+
+								if let Ok(mut stream) = nTcpStream::connect("127.0.0.1:6789") {
+									let request = json!({
+										"blob": &job_state.blob,
+										"nonce": nonce
+									});
+
+									if let Ok(req_str) = serde_json::to_string(&request) {
+										let _ = stream.write_all(req_str.as_bytes());
+										let _ = stream.write_all(b"\n");
+
+										let mut reader = iBufReader::new(stream);
+										let mut response = String::new();
+
+										if let Ok(_) = reader.read_line(&mut response) {
+											if let Ok(json_resp) = serde_json::from_str::<serde_json::Value>(&response) {
+												if json_resp["status"] == "ok" {
+													if let Some(hash_str) = json_resp["hash"].as_str() {
+														if let Ok(diff) = rx_hash_to_difficulty(hash_str) {
+															hashdiff = diff;
+														}
+													}
+												}
+											}
 										}
 									}
-									Err(_) => { hashdiff = 0; }
 								}
 								
                                 if job_state.job_id == job_id {
 									if hashdiff >= job_state.difficulty {
-										let _ = mine_block(&job_state.coins.to_string(), &job_state.miner, nonce, worker_id, 2);
 										let status = "OK";
 										job_state.shares += 1;
 										let response = json!({
@@ -371,6 +437,7 @@ pub async fn handle_connection(mut socket: TcpStream, state: SharedState) -> Res
 										let response_text = serde_json::to_string(&response)? + "\n";
 										let mut writer = job_state.writer.lock().await;
 										writer.write_all(response_text.as_bytes()).await?;
+										let _ = mine_block(&job_state.coins.to_string(), &job_state.miner, nonce, worker_id, 2);
 									}
 									else {
 										let status = "ERROR";
@@ -700,6 +767,12 @@ async fn main() -> sled::Result<()> {
 	set_latest_block_info();
 	preload_block_history();
 	print_log_message(format!("Chain started with height: {}, hash: {}", config::actual_height(), config::actual_hash()), 1);
+	
+	thread::spawn(|| {
+		if let Err(e) = start_local_hash_server() {
+			eprintln!("Local hash server error: {}", e);
+		}
+	});
 
 	println!("");
 	println!("Available commands:");

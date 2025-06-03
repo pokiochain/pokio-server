@@ -6,7 +6,7 @@ use std::str::FromStr;
 use std::sync::{Mutex, OnceLock, atomic::{AtomicI64, AtomicU64, AtomicU8, AtomicUsize, Ordering}};
 use sled;
 
-use once_cell::unsync::Lazy; // Nota: usamos `unsync`, no `sync`
+use once_cell::unsync::Lazy;
 use randomx_rs::{RandomXFlag, RandomXCache, RandomXVM};
 use std::cell::RefCell;
 
@@ -30,11 +30,9 @@ thread_local! {
     static THREAD_VM: Lazy<RefCell<RandomXVM>> = Lazy::new(|| {
         let key_hex = "b38737d8f08e1b0b033611bb268bd79b236c3089a756b79906eff085c67a7e31";
         let key = hex::decode(key_hex).expect("clave inválida");
-
         let flags = RandomXFlag::FLAG_DEFAULT | RandomXFlag::FLAG_JIT | RandomXFlag::FLAG_HARD_AES;
-        let cache = RandomXCache::new(flags, &key).expect("fallo al crear cache");
-        let vm = RandomXVM::new(flags, Some(cache), None).expect("fallo al crear VM");
-
+        let cache = RandomXCache::new(flags, &key).expect("RandomX cache creation error");
+        let vm = RandomXVM::new(flags, Some(cache), None).expect("RandomX VM creation error");
         RefCell::new(vm)
     });
 }

@@ -30,6 +30,9 @@ use std::collections::VecDeque;
 use std::sync::Mutex;
 use once_cell::sync::Lazy;
 use num_traits::ToPrimitive;
+use std::io::{BufReader as iBufReader, Write as iWrite};
+use std::net::{TcpListener as nTcpListener, TcpStream as nTcpStream};
+use std::io::BufRead;
 
 use crate::constants::*;
 use crate::merkle::*;
@@ -737,17 +740,30 @@ pub fn save_block_to_db(new_block: &mut Block, checkpoint: u8) -> Result<(), Box
 						target,
 						rx_first_two_txs
 					);
-					let rx_hashdiff: u64;
-					match compute_randomx_hash(&rx_blob, &new_block.nonce) {
-						Ok(calculated_hash) => {
-							match rx_hash_to_difficulty(&calculated_hash) {
-								Ok(difficulty) => {rx_hashdiff = difficulty; },
-								Err(_e) => {
-									rx_hashdiff = 0;
-								},
+					let mut rx_hashdiff = 0;
+
+					if let Ok(mut stream) = nTcpStream::connect("127.0.0.1:6789") {
+						let request = json!({
+							"blob": &rx_blob, 
+							"nonce": &new_block.nonce
+						});
+						if let Ok(req_str) = serde_json::to_string(&request) {
+							let _ = stream.write_all(req_str.as_bytes());
+							let _ = stream.write_all(b"\n");
+							let mut reader = iBufReader::new(stream);
+							let mut response = String::new();
+							if let Ok(_) = reader.read_line(&mut response) {
+								if let Ok(json_resp) = serde_json::from_str::<serde_json::Value>(&response) {
+									if json_resp["status"] == "ok" {
+										if let Some(hash_str) = json_resp["hash"].as_str() {
+											if let Ok(diff) = rx_hash_to_difficulty(hash_str) {
+												rx_hashdiff = diff;
+											}
+										}
+									}
+								}
 							}
 						}
-						Err(_) => { rx_hashdiff = 0; }
 					}
 					
 					if rx_hashdiff < rx_difficulty {
