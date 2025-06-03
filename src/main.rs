@@ -92,7 +92,7 @@ static PORT: u16 = 3333;
 
 pub fn start_local_hash_server() -> std::io::Result<()> {
     let listener = nTcpListener::bind("127.0.0.1:6789")?;
-    println!("RandomX hash server listening on 127.0.0.1:6789");
+	print_log_message(format!("RandomX hash server listening on 127.0.0.1:6789"), 1);
 
     for stream in listener.incoming() {
         match stream {
@@ -110,7 +110,6 @@ pub fn start_local_hash_server() -> std::io::Result<()> {
 
 fn handle_hash_connection(mut stream: nTcpStream) {
     let peer = stream.peer_addr().unwrap_or_else(|_| "unknown".parse().unwrap());
-    println!("Accepted connection from {}", peer);
 
     let mut reader = iBufReader::new(stream.try_clone().unwrap());
     let mut request_line = String::new();
@@ -773,6 +772,30 @@ async fn main() -> sled::Result<()> {
 			eprintln!("Local hash server error: {}", e);
 		}
 	});
+
+	sleep(tDuration::from_millis(1300));
+
+	if let Ok(mut stream) = nTcpStream::connect("127.0.0.1:6789") {
+		let request = json!({
+			"blob": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+			"nonce": "11111111"
+		});
+		if let Ok(req_str) = serde_json::to_string(&request) {
+			let _ = stream.write_all(req_str.as_bytes());
+			let _ = stream.write_all(b"\n");
+			let mut reader = iBufReader::new(stream);
+			let mut response = String::new();
+			if let Ok(_) = reader.read_line(&mut response) {
+				if let Ok(json_resp) = serde_json::from_str::<serde_json::Value>(&response) {
+					if json_resp["status"] == "ok" {
+						if let Some(hash_str) = json_resp["hash"].as_str() {
+							print_log_message(format!("RandomX VM started: {}", hash_str), 1);
+						}
+					}
+				}
+			}
+		}
+	}
 
 	println!("");
 	println!("Available commands:");

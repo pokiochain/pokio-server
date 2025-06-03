@@ -84,7 +84,7 @@ pub fn start_nng_server(ips: Vec<String>) {
 									
 									tokio::spawn(async move {
 										let _ = client.post(&url).json(&payload).send().await;
-										print_log_message(format!("PUT Block to {}", url), 1);
+										print_log_message(format!("PUT Block to {}", url), 2);
 									});
 									
 									/*tokio::spawn(async move {
@@ -127,7 +127,7 @@ pub fn start_nng_server(ips: Vec<String>) {
 										
 										tokio::spawn(async move {
 											let _ = client.post(&url).json(&payload).send().await;
-											print_log_message(format!("TX Sent to {}", url), 1);
+											print_log_message(format!("TX Sent to {}", url), 3);
 										});
 
 										/*tokio::spawn(async move {
