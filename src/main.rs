@@ -704,7 +704,7 @@ fn mine_block(coins: &str, miner: &str, nonce: &str, id: &str, algo: u64, extra_
 			let txblock_key = format!("txblock:{}", block_hash.clone());
 			db.insert(txblock_key, transactions_hash_list.as_bytes())?;
 			
-			print_log_message(format!("Block found. Diff: {}, Hash: {}", new_block.difficulty, block_hash.clone()), 1);
+			print_log_message(format!("Block {} found for {} POKIO by minerid: {}", new_block.height, new_block.block_reward, id), 1);
 			
 			new_block.hash = block_hash;
 			
