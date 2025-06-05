@@ -168,8 +168,14 @@ pub async fn broadcast_new_job(state: &SharedState, height: u64, hash: String, t
     for mut entry in state.iter_mut() {
         let job_state = entry.value_mut();
         let coins = job_state.coins;
-		let extra_data: String = job_state.worker_id.replace("-", "")[..4].to_lowercase();
 		let (ah, _, _) = get_latest_block_info();
+		let extra_data: String;
+		if ah > 520000 {
+			extra_data = job_state.worker_id.replace("-", "")[..4].to_lowercase();
+		} else {
+			extra_data = "0101".to_string();
+		}
+		
         let difficulty = calculate_rx_diff(coins, ah);
         let target = difficulty_to_target(difficulty);
         let job_id = Uuid::new_v4().to_string();
@@ -299,7 +305,12 @@ pub async fn handle_connection(mut socket: TcpStream, state: SharedState) -> Res
 						let (actual_height, actual_hash, actual_ts) = get_latest_block_info();
 						let worker_uuid = Uuid::new_v4();
 						let worker_id = worker_uuid.to_string();
-						let extra_data: String = worker_uuid.simple().to_string()[..4].to_lowercase();
+						let extra_data: String;
+						if actual_height > 520000 {
+							extra_data = worker_id.replace("-", "")[..4].to_lowercase();
+						} else {
+							extra_data = "0101".to_string();
+						}
 
 						let job_id = Uuid::new_v4().to_string();
 						let coins = 50;
@@ -442,8 +453,13 @@ pub async fn handle_connection(mut socket: TcpStream, state: SharedState) -> Res
 										let response_text = serde_json::to_string(&response)? + "\n";
 										let mut writer = job_state.writer.lock().await;
 										writer.write_all(response_text.as_bytes()).await?;
-										let extra_data: String = job_state.worker_id.replace("-", "")[..4].to_lowercase();
-										let _ = mine_block(&job_state.coins.to_string(), &job_state.miner, nonce, worker_id, 2, &extra_data);
+										let (actual_height, _actual_hash, _actual_ts) = get_latest_block_info();
+										if actual_height > 520000 {
+											let extra_data = job_state.worker_id.replace("-", "")[..4].to_lowercase();
+											let _ = mine_block(&job_state.coins.to_string(), &job_state.miner, nonce, worker_id, 2, &extra_data);
+										} else {
+											let _ = mine_block(&job_state.coins.to_string(), &job_state.miner, nonce, worker_id, 2, "");
+										}
 									}
 									else {
 										let status = "ERROR";
@@ -478,7 +494,12 @@ pub async fn handle_connection(mut socket: TcpStream, state: SharedState) -> Res
 							if let Some(mut job_state) = state.get_mut(worker_id) {
 								if coins > 0 { //job_state.coins != coins {
 									job_state.coins = coins;
-									let extra_data: String = job_state.worker_id.replace("-", "")[..4].to_lowercase();
+									let extra_data: String;
+									if ah > 520000 {
+										extra_data = job_state.worker_id.replace("-", "")[..4].to_lowercase();
+									} else {
+										extra_data = "0101".to_string();
+									}
 									
 									job_state.difficulty = difficulty;
 									job_state.target = target.clone();
@@ -1160,6 +1181,8 @@ async fn main() -> sled::Result<()> {
 	let mining_cache: MiningCache = Arc::new(Mutex::new(HashMap::new()));
 	let cache = mining_cache.clone();
 	
+	static ERROR_LOG: Lazy<Mutex<HashMap<String, u32>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+	
 	let mining_route = warp::path("mining")
 		.and(warp::post())
 		.and(remote())
@@ -1177,12 +1200,27 @@ async fn main() -> sled::Result<()> {
 			let response = match method {
 				"getMiningTemplate" => {
 					let (actual_height, _, _) = get_latest_block_info();
-					let coins = data["coins"].as_str().unwrap_or("1000");
+					let mut coins = data["coins"].as_str().unwrap_or("1000").to_string();
 					let miner = data["miner"].as_str().unwrap_or("");
 					let hr = data["hr"].as_str().unwrap_or("");
 
-					let key = (actual_height, coins.to_string(), miner.to_string());
-					
+					let error_count = {
+						let log = ERROR_LOG.lock().unwrap();
+						*log.get(id).unwrap_or(&0)
+					};
+
+					if error_count > 0 {
+						let error_factor = error_count / 3;
+						if error_factor > 0 {
+							if let Ok(coins_value) = coins.parse::<u64>() {
+								let adjusted = coins_value * error_factor as u64;
+								coins = adjusted.to_string();
+							}
+						}
+					}
+
+					let key = (actual_height, coins.clone(), miner.to_string());
+
 					{
 						let mut guard = cache.lock().unwrap();
 						guard.retain(|(height, _, _), _| *height >= actual_height);
@@ -1194,13 +1232,13 @@ async fn main() -> sled::Result<()> {
 					};
 
 					let mining_template: String = match cached_template {
-						Some(template) => { 
+						Some(template) => {
 							template
 						}
 						None => {
-							let new_template = get_mining_template(coins, miner);
+							let new_template = get_mining_template(&coins, miner);
 							cache.lock().unwrap().insert(key, new_template.clone());
-							save_miner(&miner.to_lowercase(), id, coins, hr);
+							save_miner(&miner.to_lowercase(), id, &coins, hr);
 							new_template
 						}
 					};
@@ -1279,8 +1317,16 @@ async fn main() -> sled::Result<()> {
 					let coins = data["coins"].as_str().unwrap_or("1000");
 					let miner = data["miner"].as_str().unwrap_or("");
 					let nonce = data["nonce"].as_str().unwrap_or("0000000000000000");
-					let _ = mine_block(coins, miner, nonce, id, 1, "");
-					json!({"jsonrpc": "2.0", "id": id, "result": "ok"})
+
+					match mine_block(coins, miner, nonce, id, 1, "") {
+						Ok(_) => json!({"jsonrpc": "2.0", "id": id, "result": "ok"}),
+						Err(_) => {
+							let mut log = ERROR_LOG.lock().unwrap();
+							let counter = log.entry(id.to_string()).or_insert(0);
+							*counter += 1;
+							json!({"jsonrpc": "2.0", "id": id, "result": "ok"})
+						}
+					}
 				},
 				"putBlock" => {
 					
