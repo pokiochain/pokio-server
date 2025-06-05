@@ -170,7 +170,7 @@ pub async fn broadcast_new_job(state: &SharedState, height: u64, hash: String, t
         let coins = job_state.coins;
 		let (ah, _, _) = get_latest_block_info();
 		let extra_data: String;
-		if ah > 520000 {
+		if ah > EXTRA_NONCE_HEIGHT {
 			extra_data = job_state.worker_id.replace("-", "")[..4].to_lowercase();
 		} else {
 			extra_data = "0101".to_string();
@@ -306,7 +306,7 @@ pub async fn handle_connection(mut socket: TcpStream, state: SharedState) -> Res
 						let worker_uuid = Uuid::new_v4();
 						let worker_id = worker_uuid.to_string();
 						let extra_data: String;
-						if actual_height > 520000 {
+						if actual_height > EXTRA_NONCE_HEIGHT {
 							extra_data = worker_id.replace("-", "")[..4].to_lowercase();
 						} else {
 							extra_data = "0101".to_string();
@@ -454,7 +454,7 @@ pub async fn handle_connection(mut socket: TcpStream, state: SharedState) -> Res
 										let mut writer = job_state.writer.lock().await;
 										writer.write_all(response_text.as_bytes()).await?;
 										let (actual_height, _actual_hash, _actual_ts) = get_latest_block_info();
-										if actual_height > 520000 {
+										if actual_height > EXTRA_NONCE_HEIGHT {
 											let extra_data = job_state.worker_id.replace("-", "")[..4].to_lowercase();
 											let _ = mine_block(&job_state.coins.to_string(), &job_state.miner, nonce, worker_id, 2, &extra_data);
 										} else {
@@ -495,7 +495,7 @@ pub async fn handle_connection(mut socket: TcpStream, state: SharedState) -> Res
 								if coins > 0 { //job_state.coins != coins {
 									job_state.coins = coins;
 									let extra_data: String;
-									if ah > 520000 {
+									if ah > EXTRA_NONCE_HEIGHT {
 										extra_data = job_state.worker_id.replace("-", "")[..4].to_lowercase();
 									} else {
 										extra_data = "0101".to_string();
@@ -1203,18 +1203,24 @@ async fn main() -> sled::Result<()> {
 					let mut coins = data["coins"].as_str().unwrap_or("1000").to_string();
 					let miner = data["miner"].as_str().unwrap_or("");
 					let hr = data["hr"].as_str().unwrap_or("");
-
 					let error_count = {
-						let log = ERROR_LOG.lock().unwrap();
-						*log.get(id).unwrap_or(&0)
+						if let Some(addr) = addr {
+							let ip_str = addr.ip().to_string();
+							let log = ERROR_LOG.lock().unwrap();
+							*log.get(&ip_str).unwrap_or(&0)
+						} else {
+							0
+						}
 					};
 
 					if error_count > 0 {
-						let error_factor = error_count / 3;
-						if error_factor > 0 {
+						let error_factor = (error_count / 3) + 1;
+						if error_factor > 1 {
 							if let Ok(coins_value) = coins.parse::<u64>() {
-								let adjusted = coins_value * error_factor as u64;
-								coins = adjusted.to_string();
+								if coins_value < 50 {
+									let adjusted = coins_value * error_factor as u64;
+									coins = adjusted.to_string();
+								}
 							}
 						}
 					}
@@ -1317,13 +1323,30 @@ async fn main() -> sled::Result<()> {
 					let coins = data["coins"].as_str().unwrap_or("1000");
 					let miner = data["miner"].as_str().unwrap_or("");
 					let nonce = data["nonce"].as_str().unwrap_or("0000000000000000");
+					let ip_str = addr.map(|a| a.ip().to_string());
 
 					match mine_block(coins, miner, nonce, id, 1, "") {
-						Ok(_) => json!({"jsonrpc": "2.0", "id": id, "result": "ok"}),
+						Ok(_) => {
+							if let Some(addr) = addr {
+								let ip_str = addr.ip().to_string();
+								let error_count = {
+									let log = ERROR_LOG.lock().unwrap();
+									*log.get(&ip_str).unwrap_or(&0)
+								};
+								if error_count > 0 {
+									println!("{} errors: {}", id, error_count);
+								}
+							}
+							json!({"jsonrpc": "2.0", "id": id, "result": "ok"})
+						}
 						Err(_) => {
-							let mut log = ERROR_LOG.lock().unwrap();
-							let counter = log.entry(id.to_string()).or_insert(0);
-							*counter += 1;
+							if let Some(addr) = addr {
+								let ip_str = addr.ip().to_string();
+								let mut log = ERROR_LOG.lock().unwrap();
+								let counter = log.entry(ip_str).or_insert(0);
+								*counter += 1;
+								println!("{} is in error with coins {}", id, coins);
+							}
 							json!({"jsonrpc": "2.0", "id": id, "result": "ok"})
 						}
 					}
