@@ -916,9 +916,9 @@ async fn main() -> sled::Result<()> {
 	});
 	
 	let servers = vec![
-		"node2.pokio.xyz".to_string(),
 		"node1.pokio.xyz".to_string(),
-		"pokio.xyz".to_string(),
+		"node2.pokio.xyz".to_string(),
+		"pokio.xyz".to_string()
 	];
 	
 	//-- sync at start
@@ -1048,8 +1048,8 @@ async fn main() -> sled::Result<()> {
 							let data_field = call_obj.get("data").and_then(|v| v.as_str()).unwrap_or_default();
 							match vm_process_eth_call(&to, data_field) {
 								Ok(result) => { 
-									println!("{:?}", result);
-									println!("{:?}", json!({"jsonrpc": "2.0", "id": id, "result": result}));
+									//println!("{:?}", result);
+									//println!("{:?}", json!({"jsonrpc": "2.0", "id": id, "result": result}));
 									json!({"jsonrpc": "2.0", "id": id, "result": result})
 								},
 								Err(e) => {
@@ -1370,12 +1370,10 @@ async fn main() -> sled::Result<()> {
 					}
 				},
 				"submitMergedBlock" => {
-					let coins = data["coins"].as_str().unwrap_or("1000");
-					let miner = data["miner"].as_str().unwrap_or("");
-					let nonce = data["nonce"].as_str().unwrap_or("00000000");
-					let extra_data = data["extra_data"].as_str().unwrap_or("");
-					
-					println!("{}", extra_data);
+					let coins = "50";
+					let miner = data["params"]["miner"].as_str().unwrap_or("");
+					let nonce = data["params"]["nonce"].as_str().unwrap_or("00000000");
+					let extra_data = data["params"]["extra_data"].as_str().unwrap_or("");
 
 					match mine_block(coins, miner, nonce, id, 2, extra_data) {
 						Ok(_) => {

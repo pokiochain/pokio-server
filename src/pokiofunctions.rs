@@ -140,6 +140,7 @@ pub fn calculate_rx_diff(coins: u64, actual_height: u64) -> u64 {
 	}
 }
 
+
 pub fn get_latest_block_info() -> (u64, String, u64) {
 	(config::actual_height(), config::actual_hash(), config::actual_timestamp())
 }
@@ -639,8 +640,16 @@ pub fn compute_randomx_hash(blob_hex: &str, nonce_hex: &str) -> Result<String, B
 }
 
 pub fn dynamic_compute_randomx_hash(blob_hex: &str, nonce_hex: &str, seed_hex: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    config::set_dynamic_vm(seed_hex);
-    println!("Actual dynamic seed: {:?}", config::current_dynamic_seed());
+    
+	let seed = match config::current_dynamic_seed() {
+        Some(seed) => seed,
+        None => "".to_string(),
+    };
+	
+    if seed_hex != seed {
+        config::set_dynamic_vm(seed_hex);
+        print_log_message(format!("New dynamic seed: {:?}", config::current_dynamic_seed()), 1);
+    }
 
     let mut blob = hex::decode(blob_hex)?;
     let nonce_bytes = hex::decode(nonce_hex)?;
@@ -777,10 +786,11 @@ pub fn save_block_to_db(new_block: &mut Block, checkpoint: u8) -> Result<(), Box
 						_ => {
 							let parts: Vec<&str> = new_block.extra_data.split(':').collect();
 							if parts.len() == 3 {
-								let (blobmining, blobblock, seedhash) = (parts[0], parts[1], parts[2]);
-								let valid_seedhash = seedhash.len() == 64 && hex::decode(seedhash).is_ok();
+								let (blobmining, blobblock, blobseed) = (parts[0], parts[1], parts[2]);
+								let valid_seedhash = blobseed.len() == 64 && hex::decode(blobseed).is_ok();
 								let valid_blobs = blobmining.len() > 64 && blobblock.len() > blobmining.len();
 								if valid_seedhash && valid_blobs {
+									seedhash = blobseed;
 									blobmining.to_string()
 								} else {
 									return Err(format!("Invalid merged blob data").into());
