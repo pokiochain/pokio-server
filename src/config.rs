@@ -27,6 +27,10 @@ static LOG_LEVEL: OnceLock<AtomicU64> = OnceLock::new();
 static ASYNC: OnceLock<AtomicU8> = OnceLock::new();
 
 thread_local! {
+    static DYNAMIC_VM: RefCell<Option<(Vec<u8>, RandomXVM)>> = RefCell::new(None);
+}
+
+thread_local! {
     static THREAD_VM: Lazy<RefCell<RandomXVM>> = Lazy::new(|| {
         let key_hex = "b38737d8f08e1b0b033611bb268bd79b236c3089a756b79906eff085c67a7e31";
         let key = hex::decode(key_hex).expect("clave inválida");
@@ -223,5 +227,35 @@ where
     THREAD_VM.with(|cell| {
         let mut vm = cell.borrow_mut();
         f(&mut vm)
+    })
+}
+
+pub fn set_dynamic_vm(seed_hex: &str) {
+    let seed = hex::decode(seed_hex).expect("Seed hash inválido");
+    let flags = RandomXFlag::FLAG_DEFAULT | RandomXFlag::FLAG_JIT | RandomXFlag::FLAG_HARD_AES;
+
+    let cache = RandomXCache::new(flags, &seed).expect("Error creando cache RandomX");
+    let vm = RandomXVM::new(flags, Some(cache), None).expect("Error creando VM RandomX");
+
+    DYNAMIC_VM.with(|cell| {
+        *cell.borrow_mut() = Some((seed, vm));
+    });
+}
+
+pub fn with_dynamic_vm<F, R>(f: F) -> Option<R>
+where
+    F: FnOnce(&mut RandomXVM) -> R,
+{
+    DYNAMIC_VM.with(|cell| {
+        let mut opt = cell.borrow_mut();
+        opt.as_mut().map(|(_, vm)| f(vm))
+    })
+}
+
+
+pub fn current_dynamic_seed() -> Option<String> {
+    DYNAMIC_VM.with(|cell| {
+        let opt = cell.borrow();
+        opt.as_ref().map(|(seed, _)| hex::encode(seed))
     })
 }

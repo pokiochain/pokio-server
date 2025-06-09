@@ -638,6 +638,30 @@ pub fn compute_randomx_hash(blob_hex: &str, nonce_hex: &str) -> Result<String, B
     Ok(hex::encode(hash))
 }
 
+pub fn dynamic_compute_randomx_hash(blob_hex: &str, nonce_hex: &str, seed_hex: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    config::set_dynamic_vm(seed_hex);
+    println!("Actual dynamic seed: {:?}", config::current_dynamic_seed());
+
+    let mut blob = hex::decode(blob_hex)?;
+    let nonce_bytes = hex::decode(nonce_hex)?;
+    if nonce_bytes.len() != 4 {
+        return Err("Invalid nonce".into());
+    }
+    if blob.len() < 43 {
+        return Err("Invalid blob".into());
+    }
+    blob[39..43].copy_from_slice(&nonce_bytes);
+
+    let hash_result = config::with_dynamic_vm(|vm| vm.calculate_hash(&blob));
+
+    match hash_result {
+        Some(Ok(hash)) => Ok(hex::encode(hash)),
+        Some(Err(e)) => Err(Box::new(e)),
+        None => Err("Dynamic VM not initialized".into()),
+    }
+}
+
+
 pub fn rx_hash_to_difficulty(hash_hex: &str) -> Result<u64, Box<dyn std::error::Error>> {
     let hash_bytes = hex::decode(hash_hex)?;
     if hash_bytes.len() != 32 {
@@ -729,6 +753,7 @@ pub fn save_block_to_db(new_block: &mut Block, checkpoint: u8) -> Result<(), Box
 					).into());
 				}
 				
+				let mut seedhash = "";
 				if new_block.difficulty == rx_difficulty && new_block.height > UPDATE_RX_HEIGHT {
 					let ts_hex = format!("{:010x}", ts);
 					let target = difficulty_to_target(new_block.difficulty);
@@ -749,7 +774,21 @@ pub fn save_block_to_db(new_block: &mut Block, checkpoint: u8) -> Result<(), Box
 							target,
 							rx_first_two_txs
 						),
-						_ => new_block.extra_data.clone(),
+						_ => {
+							let parts: Vec<&str> = new_block.extra_data.split(':').collect();
+							if parts.len() == 3 {
+								let (blobmining, blobblock, seedhash) = (parts[0], parts[1], parts[2]);
+								let valid_seedhash = seedhash.len() == 64 && hex::decode(seedhash).is_ok();
+								let valid_blobs = blobmining.len() > 64 && blobblock.len() > blobmining.len();
+								if valid_seedhash && valid_blobs {
+									blobmining.to_string()
+								} else {
+									return Err(format!("Invalid merged blob data").into());
+								}
+							} else {
+								return Err(format!("Invalid extra_data field").into());
+							}
+						}
 					};
 
 					let mut rx_hashdiff = 0;
@@ -757,7 +796,8 @@ pub fn save_block_to_db(new_block: &mut Block, checkpoint: u8) -> Result<(), Box
 					if let Ok(mut stream) = nTcpStream::connect("127.0.0.1:6789") {
 						let request = json!({
 							"blob": &rx_blob, 
-							"nonce": &new_block.nonce
+							"nonce": &new_block.nonce,
+							"seed": &seedhash
 						});
 						if let Ok(req_str) = serde_json::to_string(&request) {
 							let _ = stream.write_all(req_str.as_bytes());

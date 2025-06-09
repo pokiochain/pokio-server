@@ -118,17 +118,31 @@ fn handle_hash_connection(mut stream: nTcpStream) {
         if let Ok(json_req) = serde_json::from_str::<Value>(&request_line) {
             let blob = json_req["blob"].as_str().unwrap_or("");
             let nonce = json_req["nonce"].as_str().unwrap_or("");
-
-            let response = match compute_randomx_hash(blob, nonce) {
-                Ok(hash) => json!({
-                    "status": "ok",
-                    "hash": hash,
-                }),
-                Err(e) => json!({
-                    "status": "error",
-                    "message": e.to_string(),
-                }),
-            };
+			let seed = json_req["seed"].as_str().unwrap_or("");
+			let response;
+			if seed == "" {
+				response = match compute_randomx_hash(blob, nonce) {
+					Ok(hash) => json!({
+						"status": "ok",
+						"hash": hash,
+					}),
+					Err(e) => json!({
+						"status": "error",
+						"message": e.to_string(),
+					}),
+				};
+			} else {
+				response = match dynamic_compute_randomx_hash(blob, nonce, seed) {
+					Ok(hash) => json!({
+						"status": "ok",
+						"hash": hash,
+					}),
+					Err(e) => json!({
+						"status": "error",
+						"message": e.to_string(),
+					}),
+				};
+			}
 
             let response_text = serde_json::to_string(&response).unwrap() + "\n";
             let _ = stream.write_all(response_text.as_bytes());
@@ -681,6 +695,10 @@ fn mine_block(coins: &str, miner: &str, nonce: &str, id: &str, algo: u64, extra_
 									/*if let Err(e) = mempooldb.remove(&key) {
 										eprintln!("Error deleting mempool entry: {:?}", e);
 									}*/
+								} else {
+									if let Err(e) = mempooldb.remove(&key) {
+										eprintln!("Error deleting mempool entry: {:?}", e);
+									}
 								}
 							}
 							Err(e) => {
@@ -704,7 +722,7 @@ fn mine_block(coins: &str, miner: &str, nonce: &str, id: &str, algo: u64, extra_
 			let txblock_key = format!("txblock:{}", block_hash.clone());
 			db.insert(txblock_key, transactions_hash_list.as_bytes())?;
 			
-			print_log_message(format!("Block {} found for {} POKIO by minerid: {}", new_block.height, new_block.block_reward, id), 1);
+			print_log_message(format!("Block {} found for {} POKIO by miner: {} ({})", new_block.height, new_block.block_reward, new_block.miner, id), 1);
 			
 			new_block.hash = block_hash;
 			
@@ -1347,6 +1365,23 @@ async fn main() -> sled::Result<()> {
 								*counter += 1;
 								println!("{} is in error with coins {}", id, coins);
 							}
+							json!({"jsonrpc": "2.0", "id": id, "result": "ok"})
+						}
+					}
+				},
+				"submitMergedBlock" => {
+					let coins = data["coins"].as_str().unwrap_or("1000");
+					let miner = data["miner"].as_str().unwrap_or("");
+					let nonce = data["nonce"].as_str().unwrap_or("00000000");
+					let extra_data = data["extra_data"].as_str().unwrap_or("");
+					
+					println!("{}", extra_data);
+
+					match mine_block(coins, miner, nonce, id, 2, extra_data) {
+						Ok(_) => {
+							json!({"jsonrpc": "2.0", "id": id, "result": "ok"})
+						}
+						Err(_) => {
 							json!({"jsonrpc": "2.0", "id": id, "result": "ok"})
 						}
 					}
