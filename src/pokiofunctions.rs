@@ -33,6 +33,8 @@ use num_traits::ToPrimitive;
 use std::io::{BufReader as iBufReader, Write as iWrite};
 use std::net::{TcpListener as nTcpListener, TcpStream as nTcpStream};
 use std::io::BufRead;
+use monero::{blockdata::block::Block as MoneroBlock, consensus::encode::deserialize, consensus::encode::serialize};
+use hex::FromHex;
 
 use crate::constants::*;
 use crate::merkle::*;
@@ -700,6 +702,7 @@ pub fn save_block_to_db(new_block: &mut Block, checkpoint: u8) -> Result<(), Box
 	
 	let result = (|| {
 		let db = config::db();
+		let pooldb = config::pooldb();
 		let mempooldb = config::mempooldb();
 		let (actual_height, prev_hash, ts) = get_latest_block_info();
 		
@@ -787,6 +790,24 @@ pub fn save_block_to_db(new_block: &mut Block, checkpoint: u8) -> Result<(), Box
 							let parts: Vec<&str> = new_block.extra_data.split(':').collect();
 							if parts.len() == 3 {
 								let (blobmining, blobblock, blobseed) = (parts[0], parts[1], parts[2]);
+								if pooldb.contains_key(blobmining)? {
+									return Err(format!("Duplicated mining blob").into());
+								}
+								let _ = pooldb.insert(blobmining.clone(), IVec::from(blobmining.as_bytes()));
+								
+								let blob_bytes = Vec::from_hex(blobblock)?;
+								let mut block: MoneroBlock = deserialize(&blob_bytes)?;
+								{
+									//println!("{:?}", block);
+									if block.header.major_version < monero::VarInt(16) {
+										return Err(format!("Invalid major version").into());
+									}
+
+									if block.header.timestamp > monero::VarInt(ts-240) || block.header.timestamp > monero::VarInt(ts+3600) {
+										return Err(format!("Invalid block date").into());
+									}
+								}
+								
 								let valid_seedhash = blobseed.len() == 64 && hex::decode(blobseed).is_ok();
 								let valid_blobs = blobmining.len() > 64 && blobblock.len() > blobmining.len();
 								if valid_seedhash && valid_blobs {

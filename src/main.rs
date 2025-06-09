@@ -1369,6 +1369,21 @@ async fn main() -> sled::Result<()> {
 						}
 					}
 				},
+				"submitMergedBlock" => {
+					let coins = "50";
+					let miner = data["params"]["miner"].as_str().unwrap_or("");
+					let nonce = data["params"]["nonce"].as_str().unwrap_or("00000000");
+					let extra_data = data["params"]["extra_data"].as_str().unwrap_or("");
+
+					match mine_block(coins, miner, nonce, id, 2, extra_data) {
+						Ok(_) => {
+							json!({"jsonrpc": "2.0", "id": id, "result": "ok"})
+						}
+						Err(_) => {
+							json!({"jsonrpc": "2.0", "id": id, "result": "ok"})
+						}
+					}
+				},
 				"putBlock" => {
 					
 					match serde_json::from_value::<String>(data["block"].clone()) {
