@@ -17,6 +17,7 @@ pub const UPDATE_1_HEIGHT: u64 = 65002;
 pub const UPDATE_2_HEIGHT: u64 = 200000;
 pub const UPDATE_3_HEIGHT: u64 = 1500000;
 pub const UPDATE_RX_HEIGHT: u64 = 480000;
+pub const MAX_MONERO_DIFF: u64 = 100000000000;
 pub const EXTRA_NONCE_HEIGHT: u64 = 520000;
 pub const COIN_DIFF: u64 = 2500000;
 pub const COIN_DIFF_2: u64 = 5000000;
