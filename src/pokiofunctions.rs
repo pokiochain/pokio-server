@@ -798,12 +798,10 @@ pub fn save_block_to_db(new_block: &mut Block, checkpoint: u8) -> Result<(), Box
 								let blob_bytes = Vec::from_hex(blobblock)?;
 								let mut block: MoneroBlock = deserialize(&blob_bytes)?;
 								{
-									//println!("{:?}", block);
 									if block.header.major_version < monero::VarInt(16) {
 										return Err(format!("Invalid major version").into());
 									}
-
-									if block.header.timestamp > monero::VarInt(ts-240) || block.header.timestamp > monero::VarInt(ts+3600) {
+									if block.header.timestamp < monero::VarInt(ts-240) || block.header.timestamp > monero::VarInt(ts+3600) {
 										return Err(format!("Invalid block date").into());
 									}
 								}
