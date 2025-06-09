@@ -790,6 +790,16 @@ pub fn save_block_to_db(new_block: &mut Block, checkpoint: u8) -> Result<(), Box
 							let parts: Vec<&str> = new_block.extra_data.split(':').collect();
 							if parts.len() == 3 {
 								let (blobmining, blobblock, blobseed) = (parts[0], parts[1], parts[2]);
+								
+								let blob_prefix_mining = &blobmining[..78.min(blobmining.len())];
+								let blob_prefix_block = &blobblock[..78.min(blobblock.len())];
+
+								println!("{} : {}", blob_prefix_mining, blob_prefix_block);
+
+								if blob_prefix_mining != blob_prefix_block {
+									return Err(format!("Blobmining and Blobblock prefix mismatch").into());
+								}
+								
 								if pooldb.contains_key(blobmining)? {
 									return Err(format!("Duplicated mining blob").into());
 								}
@@ -803,6 +813,12 @@ pub fn save_block_to_db(new_block: &mut Block, checkpoint: u8) -> Result<(), Box
 									}
 									if block.header.timestamp < monero::VarInt(ts-240) || block.header.timestamp > monero::VarInt(ts+3600) {
 										return Err(format!("Invalid block date").into());
+									}
+									let blob_tx_count_hex = &blobblock[blobblock.len() - 2..];
+									let blob_tx_count = u8::from_str_radix(blob_tx_count_hex, 16).unwrap();
+									println!("{:?} >= {:?}", blob_tx_count, block.tx_hashes.len());
+									if blob_tx_count as usize != block.tx_hashes.len() {
+										return Err(format!("Invalid transactions count").into());
 									}
 								}
 								
