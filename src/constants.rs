@@ -3,7 +3,7 @@ pub struct Checkpoint {
     pub hash: &'static str,
 }
 
-pub const FIX_BC_OFFSET: u64 = 2;
+pub const FIX_BC_OFFSET: u64 = 1;
 pub const DEFAULT_MINING_FEE: usize = 5;
 pub const HALVING_INTERVAL: u64 = 31536000;
 pub const CHAIN_ID: u64 = 850401;
@@ -15,7 +15,8 @@ pub const HASHING_TIME_COST: usize = 20;
 pub const HASHING_DELTA: usize = 4;
 pub const UPDATE_1_HEIGHT: u64 = 65002;
 pub const UPDATE_2_HEIGHT: u64 = 200000;
-pub const UPDATE_3_HEIGHT: u64 = 1500000;
+pub const UPDATE_3_HEIGHT: u64 = 2000000000;
+pub const UPDATE_4_HEIGHT: u64 = 710000;
 pub const UPDATE_RX_HEIGHT: u64 = 480000;
 pub const MAX_MONERO_DIFF: u64 = 100000000000;
 pub const EXTRA_NONCE_HEIGHT: u64 = 520000;
@@ -25,7 +26,7 @@ pub const COIN_DIFF_RX: u64 = 1000000;
 pub const COIN_DIFF_DELAY: u64 = 100;
 pub const MAX_COIN_DELAY: u64 = 10000;
 pub const CONTRACT_CREATOR: &str = "0x0000000000000000000000000000000000000000";
-pub const CHECKPOINTS: [Checkpoint; 13] = [
+pub const CHECKPOINTS: [Checkpoint; 14] = [
     Checkpoint { height: 5000, hash: "5dc59b4850c155832b29e490fb85db6735fc0777fc372ba90955e876aabc1267" },
     Checkpoint { height: 15000, hash: "82d7456b8587dcbb206d4d20f0fc5c9e118c7c79560a25caa97e254fe93cff9b" },
     Checkpoint { height: 35000, hash: "913f0359d81561649fe31f0f438797a12974c10f7e19f5eacc0baaed18c3eb40" },
@@ -39,4 +40,5 @@ pub const CHECKPOINTS: [Checkpoint; 13] = [
 	Checkpoint { height: 396000, hash: "c9a34be0e45c528b15cb285f494a856e44002510cefcaf75dc62013ae710cebe" },
 	Checkpoint { height: 466000, hash: "fc2a00b13ee6ade449fdd1ce80712bdba848418701f5073c57a8ccb05f74eb27" },
 	Checkpoint { height: 499000, hash: "19733f53a490180a2d08be87173d2ab903d30ac31d274da337636731038cbe21" },
+	Checkpoint { height: 690767, hash: "88b0cf566916c40785847eea8921b4878d3e463d1d3c556e2b1cf71168d09016" },
 ];

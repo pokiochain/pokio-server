@@ -118,27 +118,44 @@ pub fn keccak256(data: &str) -> String {
 }
 
 pub fn calculate_diff(coins: u64, actual_height: u64) -> u64 {
+	let mut mult: u64 = 1;
+
+	if actual_height > UPDATE_4_HEIGHT {
+		if let Some((_, _, _, m, _)) = get_block_range_analysis(actual_height) {
+			mult = m;
+		}
+	}
+	
 	if actual_height <= PREMINE_BLOCKS {
 		coins
 	}
 	else if actual_height >= UPDATE_1_HEIGHT {
-		if coins < MAX_COIN_DELAY { coins * (COIN_DIFF_2 - ( coins * COIN_DIFF_DELAY) ) }
-		else { coins * (COIN_DIFF_2 - ( MAX_COIN_DELAY * COIN_DIFF_DELAY) ) }
+		if coins < MAX_COIN_DELAY { mult * coins * (COIN_DIFF_2 - ( coins * COIN_DIFF_DELAY) ) }
+		else { mult * coins * (COIN_DIFF_2 - ( MAX_COIN_DELAY * COIN_DIFF_DELAY) ) }
 	}
 	else
 	{
 		let result = max(1, (4.0 - (coins as f64).log(10.0).ceil()) as u64);
-		coins * (COIN_DIFF * result)
+		mult * coins * (COIN_DIFF * result)
 	}
 }
 
 pub fn calculate_rx_diff(coins: u64, actual_height: u64) -> u64 {
+	
+	let mut mult: u64 = 1;
+
+	if actual_height > UPDATE_4_HEIGHT {
+		if let Some((_, _, _, _, m)) = get_block_range_analysis(actual_height) {
+			mult = m;
+		}
+	}
+	
 	if actual_height <= PREMINE_BLOCKS {
 		coins
 	}
 	else {
-		if coins < MAX_COIN_DELAY { coins * (COIN_DIFF_RX - ( coins * COIN_DIFF_DELAY) ) }
-		else { coins * (COIN_DIFF_RX - ( MAX_COIN_DELAY * COIN_DIFF_DELAY) ) }
+		if coins < MAX_COIN_DELAY { mult * coins * (COIN_DIFF_RX - ( coins * COIN_DIFF_DELAY) ) }
+		else { mult * coins * (COIN_DIFF_RX - ( MAX_COIN_DELAY * COIN_DIFF_DELAY) ) }
 	}
 }
 
@@ -470,6 +487,102 @@ pub fn get_16th_block() -> Option<Block> {
 	None
 }
 
+pub fn get_block_range_analysis(height: u64) -> Option<(
+    u64, // duration 100 blocks
+    usize, // blocks POKIOHash
+    usize, // blocks RandomX
+    u64, // multiplier POKIOHash
+    u64  // multiplier RandomX
+)> {
+
+    let db = config::db();
+
+    if height < 200 {
+        return None;
+    }
+
+    let start = ((height / 100) - 2) * 100;
+    let end = start + 100;
+
+    let mut timestamps = Vec::new();
+    let mut pokiohash_count = 0;
+    let mut randomx_count = 0;
+    let mut pokiohash_multiplier = 0u64;
+    let mut randomx_multiplier = 0u64;
+
+    for h in start..end {
+        let key = format!("block:{:08}", h);
+        if let Some(data) = db.get(&key).unwrap() {
+            let block: Block = bincode::deserialize(&data).unwrap();
+            timestamps.push(block.timestamp);
+
+            let reward = block.block_reward as f64;
+            let diff = block.difficulty as f64;
+
+            if reward == 0.0 {
+                continue;
+            }
+
+            let diff_per_coin = diff / reward;
+
+            match block.nonce.len() {
+                16 => {
+                    let norm = diff_per_coin / (COIN_DIFF_2 as f64);
+                    let floored = norm.floor() as u64;
+                    pokiohash_multiplier = floored + 1;
+                    pokiohash_count += 1;
+                }
+                8 => {
+                    let norm = diff_per_coin / (COIN_DIFF_RX as f64);
+                    let floored = norm.floor() as u64;
+                    randomx_multiplier = floored + 1;
+                    randomx_count += 1;
+                }
+                _ => {}
+            }
+        } else {
+            return None;
+        }
+    }
+
+    if let (Some(first), Some(last)) = (timestamps.first(), timestamps.last()) {
+        let duration = last.saturating_sub(*first);
+
+        if duration < 600 {
+            if pokiohash_count > 60 {
+                pokiohash_multiplier += 1;
+            }
+            if randomx_count > 60 {
+                randomx_multiplier += 1;
+            }
+            if pokiohash_count <= 60 && randomx_count <= 60 {
+                pokiohash_multiplier += 1;
+                randomx_multiplier += 1;
+            }
+        }
+
+        if duration > 3000 {
+            pokiohash_multiplier = pokiohash_multiplier.saturating_sub(1).max(1);
+            randomx_multiplier = randomx_multiplier.saturating_sub(1).max(1);
+        } else {
+            pokiohash_multiplier = pokiohash_multiplier.max(1);
+            randomx_multiplier = randomx_multiplier.max(1);
+        }
+
+        Some((
+            duration,
+            pokiohash_count,
+            randomx_count,
+            pokiohash_multiplier,
+            randomx_multiplier
+        ))
+    } else {
+        None
+    }
+}
+
+
+
 pub fn get_block_as_json(block_number: u64) -> Value {
 	let db = config::db();
 	let block_key = format!("block:{:08}", block_number);
@@ -789,16 +902,20 @@ pub fn save_block_to_db(new_block: &mut Block, checkpoint: u8) -> Result<(), Box
 						_ => {
 							let parts: Vec<&str> = new_block.extra_data.split(':').collect();
 							if parts.len() == 3 {
-								let (blobmining, blobblock, blobseed) = (parts[0], parts[1], parts[2]);
-								let blob_prefix_mining = &blobmining[..78.min(blobmining.len())];
-								let blob_prefix_block = &blobblock[..78.min(blobblock.len())];
-								if blob_prefix_mining != blob_prefix_block {
-									return Err(format!("Blobmining and Blobblock prefix mismatch").into());
-								}
-								if pooldb.contains_key(blobmining)? {
-									return Err(format!("Duplicated mining blob").into());
-								}
-								let _ = pooldb.insert(blobmining.clone(), IVec::from(blobmining.as_bytes()));
+							let (blobmining, blobblock, blobseed) = (parts[0], parts[1], parts[2]);
+							let blob_prefix_mining = &blobmining[..78.min(blobmining.len())];
+							let mut blobsave: String = blobmining.to_string();
+							if new_block.height > UPDATE_4_HEIGHT {
+								blobsave = format!("{}{}", blob_prefix_mining, new_block.nonce);
+							}
+							let blob_prefix_block = &blobblock[..78.min(blobblock.len())];
+							if blob_prefix_mining != blob_prefix_block {
+								return Err(format!("Blobmining and Blobblock prefix mismatch").into());
+							}
+							if pooldb.contains_key(&blobsave)? {
+								return Err(format!("Duplicated mining blob").into());
+							}
+							let _ = pooldb.insert(blobsave.clone(), IVec::from(blobsave.as_bytes()));
 								let blob_bytes = Vec::from_hex(blobblock)?;
 								let mut block: MoneroBlock = deserialize(&blob_bytes)?;
 								{

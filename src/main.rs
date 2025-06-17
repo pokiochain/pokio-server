@@ -1199,8 +1199,6 @@ async fn main() -> sled::Result<()> {
 	let mining_cache: MiningCache = Arc::new(Mutex::new(HashMap::new()));
 	let cache = mining_cache.clone();
 	
-	static ERROR_LOG: Lazy<Mutex<HashMap<String, u32>>> = Lazy::new(|| Mutex::new(HashMap::new()));
-	
 	let mining_route = warp::path("mining")
 		.and(warp::post())
 		.and(remote())
@@ -1221,28 +1219,6 @@ async fn main() -> sled::Result<()> {
 					let mut coins = data["coins"].as_str().unwrap_or("1000").to_string();
 					let miner = data["miner"].as_str().unwrap_or("");
 					let hr = data["hr"].as_str().unwrap_or("");
-					let error_count = {
-						if let Some(addr) = addr {
-							let ip_str = addr.ip().to_string();
-							let log = ERROR_LOG.lock().unwrap();
-							*log.get(&ip_str).unwrap_or(&0)
-						} else {
-							0
-						}
-					};
-
-					if error_count > 0 {
-						let error_factor = (error_count / 3) + 1;
-						if error_factor > 1 {
-							if let Ok(coins_value) = coins.parse::<u64>() {
-								if coins_value < 50 {
-									let adjusted = coins_value * error_factor as u64;
-									coins = adjusted.to_string();
-								}
-							}
-						}
-					}
-
 					let key = (actual_height, coins.clone(), miner.to_string());
 
 					{
@@ -1345,27 +1321,10 @@ async fn main() -> sled::Result<()> {
 
 					match mine_block(coins, miner, nonce, id, 1, "") {
 						Ok(_) => {
-							if let Some(addr) = addr {
-								let ip_str = addr.ip().to_string();
-								let error_count = {
-									let log = ERROR_LOG.lock().unwrap();
-									*log.get(&ip_str).unwrap_or(&0)
-								};
-								if error_count > 0 {
-									println!("{} errors: {}", id, error_count);
-								}
-							}
 							json!({"jsonrpc": "2.0", "id": id, "result": "ok"})
 						}
 						Err(_) => {
-							if let Some(addr) = addr {
-								let ip_str = addr.ip().to_string();
-								let mut log = ERROR_LOG.lock().unwrap();
-								let counter = log.entry(ip_str).or_insert(0);
-								*counter += 1;
-								println!("{} is in error with coins {}", id, coins);
-							}
-							json!({"jsonrpc": "2.0", "id": id, "result": "ok"})
+							json!({"jsonrpc": "2.0", "id": id, "result": "error"})
 						}
 					}
 				},
