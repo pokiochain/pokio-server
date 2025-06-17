@@ -206,8 +206,6 @@ pub fn start_virtual_machine() {
 													print_log_message("Contract not found".to_string(), 1);
 													continue;
 												}
-												
-												print_log_message(format!("creator: {} vs {}", creator.to_lowercase(), sender_address.to_lowercase()), 1);
 
 												if creator.to_lowercase() == sender_address.to_lowercase()
 												{
@@ -234,13 +232,7 @@ pub fn start_virtual_machine() {
 													}
 													let _ = vmdb.flush();
 													let _ = db.insert(tx_str, b"confirmed_evm_ok");
-													print_log_message(format!("{}", hex_sender_balance), 1);
-													print_log_message(format!("{} -> {} : {}", vm_sender, params[0], big_int_amount), 1);
 													let _ = db.flush();
-	/*												} else { 
-														let _ = db.insert(tx_str, b"confirmed_evm_error"); 
-														let _ = db.flush();
-													}*/
 												}
 											}
 											continue;
