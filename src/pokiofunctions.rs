@@ -360,7 +360,6 @@ pub fn get_mining_template(coins: &str, miner: &str) -> String {
 }
 
 pub fn fix_blockchain(last_valid_height: u64) -> Option<Block> {
-	
 	if config::async_status() == 0
 	{
 		while config::sync_status() == 1 {
@@ -368,39 +367,39 @@ pub fn fix_blockchain(last_valid_height: u64) -> Option<Block> {
 		}
 	}
 	config::update_sync(1);
-	
-	//println!("DELETING UNTIL: {}", last_valid_height);
-	
 	if last_valid_height > UNLOCK_OFFSET {
 		let db = config::db();
-
 		let latest = db.get("chain:latest_block").unwrap();
 		if let Some(latest) = latest {
 			let latest_height = u64::from_be_bytes(latest.as_ref().try_into().unwrap());
-
 			for h in last_valid_height + 1..=latest_height {
 				let key_to_delete = format!("block:{:08}", h);
+				if let Some(block_data) = db.get(&key_to_delete).unwrap() {
+					if let Ok(block) = bincode::deserialize::<Block>(&block_data) {
+						let parts: Vec<&str> = block.extra_data.split(':').collect();
+						if parts.len() >= 2 {
+							let blobmining = parts[0];
+							let blob_prefix_mining = &blobmining[..78.min(blobmining.len())];
+							let blobsave = format!("{}{}", blob_prefix_mining, block.nonce);
+							let pooldb = config::pooldb();
+							let _ = pooldb.remove(blobsave.as_str());
+						}
+					}
+				}
 				db.remove(&key_to_delete).unwrap();
-				//println!("DELETE BLOCK: {}", h);
 			}
-			let _ = db.insert("chain:latest_block", &last_valid_height.to_be_bytes())
-				.unwrap();
-			//set_latest_block_info();
+			let _ = db.insert("chain:latest_block", &last_valid_height.to_be_bytes()).unwrap();
 			let block_key = format!("block:{:08}", last_valid_height);
 			if let Some(block_data) = db.get(block_key).unwrap() {
 				let block: Block = bincode::deserialize(&block_data).unwrap();
 				config::update_actual_height(block.height);
 				config::update_actual_hash(block.hash);
 				config::update_actual_timestamp(block.timestamp);
-				//println!("LAST BLOCK SET: {}", config::actual_height());
 			}
-			
 			print_log_message(format!("Blockchain reordered"), 1);
 		}
 	}
-	
 	config::update_sync(0);
-	
 	None
 }
 
@@ -915,6 +914,7 @@ pub fn save_block_to_db(new_block: &mut Block, checkpoint: u8) -> Result<(), Box
 								if pooldb.contains_key(&blobsave)? {
 									return Err(format!("Duplicated mining blob").into());
 								}
+								//println!("blobsave: {}", blobsave);
 								let _ = pooldb.insert(blobsave.clone(), IVec::from(blobsave.as_bytes()));
 								let blob_bytes = Vec::from_hex(blobblock)?;
 								let mut block: MoneroBlock = deserialize(&blob_bytes)?;
@@ -925,15 +925,39 @@ pub fn save_block_to_db(new_block: &mut Block, checkpoint: u8) -> Result<(), Box
 									if block.header.timestamp < monero::VarInt(ts-240) || block.header.timestamp > monero::VarInt(ts+3600) {
 										return Err(format!("Invalid block date").into());
 									}
-									/*let blob_tx_count_hex = &blobblock[blobblock.len() - 2..];
-									let blob_tx_count = u8::from_str_radix(blob_tx_count_hex, 16).unwrap();
-									println!("{:?} >= {:?}", blob_tx_count, block.tx_hashes.len());
-									if blob_tx_count as usize != block.tx_hashes.len() {
-										return Err(format!("Invalid transactions count").into());
-									}*/
 								}
 								let valid_seedhash = blobseed.len() == 64 && hex::decode(blobseed).is_ok();
 								let valid_blobs = blobmining.len() > 64 && blobblock.len() > blobmining.len();
+								if valid_seedhash && valid_blobs {
+									seedhash = blobseed;
+									blobmining.to_string()
+								} else {
+									return Err(format!("Invalid merged blob data").into());
+								}
+							} else if parts.len() == 2 {
+								let (blobmining, blobseed) = (parts[0], parts[1]);
+								let blob_prefix_mining = &blobmining[..78.min(blobmining.len())];
+								let blobblock = format!("{}{}{}", blob_prefix_mining, new_block.nonce, MONERO_RX_RANDOM_DATA);
+								let mut blobsave: String = blobmining.to_string();
+								if new_block.height > UPDATE_4_HEIGHT {
+									blobsave = format!("{}{}", blob_prefix_mining, new_block.nonce);
+								}
+								if pooldb.contains_key(&blobsave)? {
+									return Err(format!("Duplicated mining blob").into());
+								}
+								let _ = pooldb.insert(blobsave.clone(), IVec::from(blobsave.as_bytes()));
+								let blob_bytes = Vec::from_hex(&blobblock)?;
+								let mut block: MoneroBlock = deserialize(&blob_bytes)?;
+								{
+									if block.header.major_version < monero::VarInt(16) {
+										return Err(format!("Invalid major version").into());
+									}
+									if block.header.timestamp < monero::VarInt(ts-240) || block.header.timestamp > monero::VarInt(ts+3600) {
+										return Err(format!("Invalid block date").into());
+									}
+								}
+								let valid_seedhash = blobseed.len() == 64 && hex::decode(blobseed).is_ok();
+								let valid_blobs = blobmining.len() > 64 && hex::decode(blobmining).is_ok();
 								if valid_seedhash && valid_blobs {
 									seedhash = blobseed;
 									blobmining.to_string()
@@ -1084,8 +1108,6 @@ pub fn save_block_to_db(new_block: &mut Block, checkpoint: u8) -> Result<(), Box
 										update_balance(&address, &amount, 0)
 											.expect("Error updating balance");
 									}
-									
-									
 									if tx.nonce > EthersU256::from(last_nonce) {
 										print_log_message(format!("Valid nonce {}", tx.nonce), 4);
 										let nonce_key = format!("count:{}", sender_address.to_lowercase());
