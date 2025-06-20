@@ -902,20 +902,20 @@ pub fn save_block_to_db(new_block: &mut Block, checkpoint: u8) -> Result<(), Box
 						_ => {
 							let parts: Vec<&str> = new_block.extra_data.split(':').collect();
 							if parts.len() == 3 {
-							let (blobmining, blobblock, blobseed) = (parts[0], parts[1], parts[2]);
-							let blob_prefix_mining = &blobmining[..78.min(blobmining.len())];
-							let mut blobsave: String = blobmining.to_string();
-							if new_block.height > UPDATE_4_HEIGHT {
-								blobsave = format!("{}{}", blob_prefix_mining, new_block.nonce);
-							}
-							let blob_prefix_block = &blobblock[..78.min(blobblock.len())];
-							if blob_prefix_mining != blob_prefix_block {
-								return Err(format!("Blobmining and Blobblock prefix mismatch").into());
-							}
-							if pooldb.contains_key(&blobsave)? {
-								return Err(format!("Duplicated mining blob").into());
-							}
-							let _ = pooldb.insert(blobsave.clone(), IVec::from(blobsave.as_bytes()));
+								let (blobmining, blobblock, blobseed) = (parts[0], parts[1], parts[2]);
+								let blob_prefix_mining = &blobmining[..78.min(blobmining.len())];
+								let mut blobsave: String = blobmining.to_string();
+								if new_block.height > UPDATE_4_HEIGHT {
+									blobsave = format!("{}{}", blob_prefix_mining, new_block.nonce);
+								}
+								let blob_prefix_block = &blobblock[..78.min(blobblock.len())];
+								if blob_prefix_mining != blob_prefix_block {
+									return Err(format!("Blobmining and Blobblock prefix mismatch").into());
+								}
+								if pooldb.contains_key(&blobsave)? {
+									return Err(format!("Duplicated mining blob").into());
+								}
+								let _ = pooldb.insert(blobsave.clone(), IVec::from(blobsave.as_bytes()));
 								let blob_bytes = Vec::from_hex(blobblock)?;
 								let mut block: MoneroBlock = deserialize(&blob_bytes)?;
 								{
@@ -1014,6 +1014,33 @@ pub fn save_block_to_db(new_block: &mut Block, checkpoint: u8) -> Result<(), Box
 				new_block.signature = block_signature;
 				let serialized_block = bincode::serialize(&new_block).unwrap();
 				let unsigned_serialized_block = serde_json::to_string_pretty(&new_block).unwrap();*/
+			}
+			
+			let amount_block_transactions: Vec<&str> = new_block.transactions.split('-').collect();
+			
+			let mut reward_amount: EthersU256 = EthersU256::from(0u64);
+			for tx_str in amount_block_transactions {
+				let dtx = decode_transaction(tx_str);
+				match dtx {
+					Ok(tx) => {
+						let amount = tx.value.clone();
+						if tx.nonce > EthersU256::from(100_000_000u64) {
+							reward_amount += amount;
+						}
+					}
+					Err(e) => {
+						reward_amount += EthersU256::from(0u64);
+					}
+				}
+			}
+			
+			let decimals = EthersU256::from_dec_str("1000000000000000000").unwrap();
+			let xrw = EthersU256::from(new_block.block_reward) * decimals;
+			
+			if reward_amount > xrw {
+				return Err(format!(
+					"Invalid coinbase transactions"
+				).into());
 			}
 			
 			let serialized_block = bincode::serialize(new_block)?;
