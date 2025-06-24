@@ -500,8 +500,17 @@ pub fn get_block_range_analysis(height: u64) -> Option<(
         return None;
     }
 
-    let start = ((height / 100) - 2) * 100;
-    let end = start + 100;
+    let (start, end) = if height > UPDATE_5_HEIGHT {
+		let s = ((height + 100) / 100 - 2) * 100;
+		if height % 100 == 0 {
+			(s - 100, s)
+		} else {
+			(s, s + 100)
+		}
+	} else {
+		let s = ((height / 100) - 2) * 100;
+		(s, s + 100)
+	};
 
     let mut timestamps = Vec::new();
     let mut pokiohash_count = 0;
@@ -546,8 +555,14 @@ pub fn get_block_range_analysis(height: u64) -> Option<(
 
     if let (Some(first), Some(last)) = (timestamps.first(), timestamps.last()) {
         let duration = last.saturating_sub(*first);
+		
+		let (dmin, dmax) = if height > UPDATE_5_HEIGHT {
+			(1200, 2400)
+		} else {
+			(600, 3000)
+		};
 
-        if duration < 600 {
+        if duration < dmin {
             if pokiohash_count > 60 {
                 pokiohash_multiplier += 1;
             }
@@ -560,7 +575,7 @@ pub fn get_block_range_analysis(height: u64) -> Option<(
             }
         }
 
-        if duration > 3000 {
+        if duration > dmax {
             pokiohash_multiplier = pokiohash_multiplier.saturating_sub(1).max(1);
             randomx_multiplier = randomx_multiplier.saturating_sub(1).max(1);
         } else {
@@ -1044,6 +1059,9 @@ pub fn save_block_to_db(new_block: &mut Block, checkpoint: u8) -> Result<(), Box
 			
 			let mut reward_amount: EthersU256 = EthersU256::from(0u64);
 			for tx_str in amount_block_transactions {
+				if tx_str == "" {
+					continue;
+				}
 				let dtx = decode_transaction(tx_str);
 				match dtx {
 					Ok(tx) => {
@@ -1082,6 +1100,9 @@ pub fn save_block_to_db(new_block: &mut Block, checkpoint: u8) -> Result<(), Box
 				/*if let Err(e) = mempooldb.remove(&tx_str) {
 					eprintln!("Error deleting mempool entry: {:?}", e);
 				}*/
+				if tx_str == "" {
+					continue;
+				}
 				
 				if db.contains_key(tx_str)? {
 					continue;
@@ -1169,6 +1190,11 @@ pub fn save_block_to_db(new_block: &mut Block, checkpoint: u8) -> Result<(), Box
 					let transactions: Vec<&str> = block.transactions.split('-').collect();
 
 					for tx_str in transactions {
+						
+						if tx_str == "" {
+							continue;
+						}
+						
 						match get_rawtx_status(tx_str) {
 							Some(status) if status == "processed" => {
 								let _ = db.insert(tx_str, b"confirmed")?;

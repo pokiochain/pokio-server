@@ -104,12 +104,16 @@ pub fn start_virtual_machine() {
 							let transactions: Vec<&str> = transactions_str.split('-').collect();
 							for tx_str in transactions {
 								
-								/*match get_rawtx_status(tx_str) {
+								match get_rawtx_status(tx_str) {
 									Some(status) if status == "confirmed" => {}
 									_ => {
 										continue;
 									}
-								}*/
+								}
+								
+								if tx_str == "" {
+									continue;
+								}
 								
 								let dtx = decode_transaction(tx_str);
 								match dtx {
