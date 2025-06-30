@@ -126,6 +126,12 @@ pub fn calculate_diff(coins: u64, actual_height: u64) -> u64 {
 		}
 	}
 	
+	if actual_height > UPDATE_6_HEIGHT {
+		if coins > (mult - 1) * 10 {
+			mult = 1;
+		}
+	}
+	
 	if actual_height <= PREMINE_BLOCKS {
 		coins
 	}
