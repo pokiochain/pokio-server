@@ -731,7 +731,7 @@ pub fn store_raw_transaction(raw_tx: String) -> String {
 			let raw_tx_str = raw_tx.to_string();
 			let sender_address = format!("0x{}", hex::encode(decoded_tx.from));
 			//let nonce_key = format!("count:{}", sender_address);
-			let last_nonce = get_last_nonce(&sender_address, 1);
+			let last_nonce = get_last_nonce(&sender_address, 0);
 			if decoded_tx.nonce < EthersU256::from(last_nonce + 1) {
 				print_log_message(format!("Invalid nonce: {}, expected: {}", decoded_tx.nonce, last_nonce + 1), 4);
 				return String::from("");

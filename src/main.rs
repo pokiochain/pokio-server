@@ -40,6 +40,7 @@ use std::time::{Instant, Duration};
 use std::io::{self, BufRead};
 use std::process;
 use warp::filters::addr::remote;
+use warp::filters::compression;
 use tokio::time::{sleep, Duration as tDuration};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, AsyncBufReadExt};
@@ -867,7 +868,7 @@ async fn main() -> sled::Result<()> {
 
 			match parts[0] {
 				"version" => {
-					println!("Pokio server 0.2.1");
+					println!("Pokio server 0.2.2");
 				}
 				"help" => {
 					println!("Available commands:");
@@ -1068,7 +1069,7 @@ async fn main() -> sled::Result<()> {
 						.get(0)
 						.and_then(|v| v.as_str())
 						.unwrap_or("");
-					let last_nonce = get_last_nonce(&address, 1) + 1;
+					let last_nonce = get_last_nonce(&address, 0) + 1;
 					print_log_message(format!("Last nonce for {}: {}", address, last_nonce), 2);
 					let hex_nonce = format!("0x{:x}", last_nonce);
 					json!({"jsonrpc": "2.0", "id": id, "result": hex_nonce })
@@ -1191,7 +1192,7 @@ async fn main() -> sled::Result<()> {
 				}
 			};
 			warp::reply::json(&response)
-		});
+		}).with(compression::gzip());
 	
 	type CacheKey = (u64, String, String);
 	type MiningCache = Arc<Mutex<HashMap<CacheKey, String>>>;
@@ -1391,7 +1392,7 @@ async fn main() -> sled::Result<()> {
 			warp::reply::json(&response)
 			
 			
-		});
+		}).with(compression::gzip());
 
 	let routes = rpc_route.or(mining_route);
 	warp::serve(routes).run(([0, 0, 0, 0], 30303)).await;
