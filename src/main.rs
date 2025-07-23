@@ -40,7 +40,6 @@ use std::time::{Instant, Duration};
 use std::io::{self, BufRead};
 use std::process;
 use warp::filters::addr::remote;
-use warp::filters::compression;
 use tokio::time::{sleep, Duration as tDuration};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, AsyncBufReadExt};
@@ -1192,7 +1191,7 @@ async fn main() -> sled::Result<()> {
 				}
 			};
 			warp::reply::json(&response)
-		}).with(compression::gzip());
+		}).with(warp::compression::gzip());
 	
 	type CacheKey = (u64, String, String);
 	type MiningCache = Arc<Mutex<HashMap<CacheKey, String>>>;
@@ -1392,7 +1391,7 @@ async fn main() -> sled::Result<()> {
 			warp::reply::json(&response)
 			
 			
-		}).with(compression::gzip());
+		}).with(warp::compression::gzip());
 
 	let routes = rpc_route.or(mining_route);
 	warp::serve(routes).run(([0, 0, 0, 0], 30303)).await;

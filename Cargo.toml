@@ -30,7 +30,7 @@ rlp = "0.5"
 k256 = "0.9"
 num-bigint = "0.4.6"
 num-traits = "0.2.19"
-warp = "0.3"
+warp = { version = "0.3", features = ["compression"] }
 futures = "0.3"
 chrono = "0.4.39"
 ethereum-types = "0.12"
