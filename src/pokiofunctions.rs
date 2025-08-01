@@ -968,13 +968,16 @@ pub fn save_block_to_db(new_block: &mut Block, checkpoint: u8) -> Result<(), Box
 								}
 								let _ = pooldb.insert(blobsave.clone(), IVec::from(blobsave.as_bytes()));
 								let blob_bytes = Vec::from_hex(&blobblock)?;
-								let mut block: MoneroBlock = deserialize(&blob_bytes)?;
+								if blobseed != "b38737d8f08e1b0b033611bb268bd79b236c3089a756b79906eff085c67a7e31"
 								{
-									if block.header.major_version < monero::VarInt(16) {
-										return Err(format!("Invalid major version").into());
-									}
-									if block.header.timestamp < monero::VarInt(ts-240) || block.header.timestamp > monero::VarInt(ts+3600) {
-										return Err(format!("Invalid block date").into());
+									let mut block: MoneroBlock = deserialize(&blob_bytes)?;
+									{
+										if block.header.major_version < monero::VarInt(16) {
+											return Err(format!("Invalid major version").into());
+										}
+										if block.header.timestamp < monero::VarInt(ts-240) || block.header.timestamp > monero::VarInt(ts+3600) {
+											return Err(format!("Invalid block date").into());
+										}
 									}
 								}
 								let valid_seedhash = blobseed.len() == 64 && hex::decode(blobseed).is_ok();
