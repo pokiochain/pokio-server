@@ -120,7 +120,7 @@ fn handle_hash_connection(mut stream: nTcpStream) {
             let nonce = json_req["nonce"].as_str().unwrap_or("");
 			let seed = json_req["seed"].as_str().unwrap_or("");
 			let response;
-			if seed == "" {
+			if seed == "" || seed == "b38737d8f08e1b0b033611bb268bd79b236c3089a756b79906eff085c67a7e31" {
 				response = match compute_randomx_hash(blob, nonce) {
 					Ok(hash) => json!({
 						"status": "ok",
